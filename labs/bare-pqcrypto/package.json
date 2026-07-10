@@ -8,7 +8,9 @@
     "test": "brittle test/*.test.js"
   },
   "dependencies": {
-    "b4a": "^1.6.4"
+    "@noble/post-quantum": "^0.6.1",
+    "b4a": "^1.6.4",
+    "sodium-universal": "^5.0.1"
   },
   "devDependencies": {
     "brittle": "^3.0.0"

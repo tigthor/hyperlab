@@ -67,7 +67,50 @@ test('cpace input validation and state machine', function (t) {
   s.start()
   t.exception(() => s.start(), /already called/)
   t.exception(() => s.finish(b4a.alloc(4)), /32-byte/)
-  t.exception(() => s.finish(b4a.alloc(32)), /invalid remote/) // all-zero is not a valid point
+})
+
+test('cpace rejects the identity element (all-zero ristretto encoding)', function (t) {
+  const sid = b4a.alloc(16)
+  const s = new CPace('pass', { isInitiator: true, sid })
+  s.start()
+  // The all-zero 32-byte string is the canonical encoding of the ristretto255
+  // identity — it decodes, so we must reject it explicitly, not rely on a
+  // decode failure.
+  t.exception(() => s.finish(b4a.alloc(32)), /identity\/low-order element/)
+})
+
+test('cpace rejects a non-canonical / garbage peer element', function (t) {
+  const sid = b4a.alloc(16)
+  const s = new CPace('pass', { isInitiator: true, sid })
+  s.start()
+  const garbage = b4a.alloc(32).fill(0xff) // not a valid ristretto255 encoding
+  t.exception(() => s.finish(garbage), /non-canonical encoding/)
+})
+
+test('cpace determinism: injected fixed rng yields a known ISK (KAT)', function (t) {
+  const sid = b4a.alloc(16).fill(0x5a)
+  const mkRng = (byte) => (buf) => { for (let i = 0; i < buf.byteLength; i++) buf[i] = (byte + i) & 0xff }
+  const a = new CPace('known-answer-pass', { isInitiator: true, sid, rng: mkRng(0x11) })
+  const b = new CPace('known-answer-pass', { isInitiator: false, sid, rng: mkRng(0x22) })
+
+  const msgA = a.start()
+  const msgB = b.start()
+  t.is(b4a.toString(msgA, 'hex'), '38aa2715231076497cff31c2b2a04eed7221337555e33236e7b5da2dbc61e549', 'Ya is deterministic under the injected rng')
+  t.is(b4a.toString(msgB, 'hex'), '944ee193f5e5c6aa398a5496174dfe0aeb44b13e2b68162673617c4ae5665902', 'Yb is deterministic under the injected rng')
+
+  const k1 = a.finish(msgB)
+  const k2 = b.finish(msgA)
+  t.alike(k1, k2, 'both sides agree')
+  t.is(b4a.toString(k1, 'hex'), '9a470575cb056cf533eb0b68974b4b7bdc2c411d318841f78bc1e5f87dfca589', 'ISK matches the recorded known answer')
+})
+
+test('cpace generator is a valid prime-order element (no cofactor caveat)', function (t) {
+  const sid = b4a.alloc(16)
+  const g = deriveGenerator(b4a.from('pass'), sid)
+  t.is(g.byteLength, 32)
+  t.alike(g, deriveGenerator(b4a.from('pass'), sid), 'deterministic in (passphrase, sid)')
+  t.unlike(g, deriveGenerator(b4a.from('pass'), b4a.alloc(16).fill(1)), 'sid changes the generator')
+  t.unlike(g, deriveGenerator(b4a.from('other'), sid), 'passphrase changes the generator')
 })
 
 test('topic derivation is real and key-independent', function (t) {

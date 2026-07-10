@@ -28,7 +28,7 @@ const topic = topicFromPassphrase('bright-otter-42')
 const beam = createPakeBeam('bright-otter-42')
 ```
 
-Prototype notes: the group is ed25519 with the cofactor cleared via libsodium's Elligator map (`crypto_core_ed25519_from_uniform`) because `sodium-universal` does not expose ristretto255, which the CPace RFC draft specifies. The session id (`sid`) should come from the rendezvous (e.g. sorted connection nonces). Not audited for side channels — prototype-grade only.
+Implementation notes: the group is now **ristretto255** (`@noble/curves`' `ristretto255.Point` + RFC-9380 `ristretto255_hasher.hashToCurve`), the prime-order group the CFRG CPace draft specifies — so the generator `g = hashToCurve(DSI || sid || passphrase)` is always a full-order element and there is **no cofactor / small-subgroup element to launder** (the earlier ed25519/Elligator prototype's caveat is gone). The only degenerate element is the identity, which `finish()` rejects explicitly. Each side samples a scalar `y`, sends `Y = y·g`, and derives `ISK = H(DSI_ISK || sid || transcript || y·Ypeer)`. The session id (`sid`) should come from the rendezvous (e.g. sorted connection nonces). Not audited for side channels: `@noble/curves` targets constant-time field ops, but this module's control flow is not hardened, and the per-session scalar is a `bigint` (from `hashToScalar`) that cannot be memzeroed — prototype-grade only.
 
 ## Acceptance gate
 

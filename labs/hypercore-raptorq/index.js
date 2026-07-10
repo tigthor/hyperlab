@@ -1,13 +1,24 @@
-// hypercore-raptorq — RaptorQ (RFC 6330) fountain-coded replication as a
-// hypercore extension message: repair symbols travel alongside the existing
-// block/hash messages. (HC-R1, research HC-E3)
+// hypercore-raptorq — systematic random-linear fountain coding over GF(256)
+// as a hypercore extension message: repair symbols travel alongside the
+// existing block/hash messages. (HC-R1, research HC-E3)
 //
-// What is real today: the wire message codec and the extension plumbing
-// (attach/send/broadcast over live hypercore replication). What throws:
-// the actual RFC 6330 encoder/decoder.
+// HONESTY NOTE. This is NOT literal RFC 6330 RaptorQ. It is a systematic
+// *random linear network code* (RLNC-style fountain) over GF(256):
+//   - For a group of k source blocks, symbols with esi < k are the source
+//     blocks VERBATIM (systematic — no-loss transfer decodes for free).
+//   - Symbols with esi >= k are random linear combinations of the k blocks
+//     over GF(256); their coefficient vector is derived deterministically
+//     from esi (a PRNG seed), so the wire carries no coefficient payload.
+//   - A decoder reconstructs the k blocks from ANY k linearly-independent
+//     received symbols via Gaussian elimination over GF(256).
+// It has the real "any k symbols" fountain property the book needs, but
+// decoding is O(k^2 * symbolSize) with no sparse LDPC/HDPC precode and no LT
+// peeling — so it does not have RaptorQ's near-linear decode or its
+// standardized k+2 overhead bound. See README + StructuredOutput stillStub.
 
 const c = require('compact-encoding')
 const b4a = require('b4a')
+const gf = require('./gf')
 
 const EXTENSION_NAME = 'hyperlab/raptorq'
 const DEFAULT_SYMBOL_SIZE = 1024 // T: bytes per encoding symbol
@@ -15,8 +26,7 @@ const DEFAULT_GROUP_SIZE = 16 // K: source blocks per coding group
 
 // Wire format for one encoding symbol. A group is K consecutive hypercore
 // blocks; symbols with esi < k are systematic (raw source data), esi >= k
-// are repair symbols. Any k + epsilon received symbols reconstruct the group
-// (k with >99% probability, k+2 with >99.9999% per RFC 6330).
+// are repair symbols whose coefficients are derived from esi.
 const symbolEncoding = {
   preencode (state, m) {
     c.uint.preencode(state, m.group)
@@ -40,90 +50,224 @@ const symbolEncoding = {
   }
 }
 
+// Deterministic coefficient vector for a repair symbol, keyed by esi. Both
+// encoder and decoder call this, so no coefficients travel on the wire.
+// xorshift32 seeded from esi; the row is guaranteed non-zero.
+function deriveCoeffs (esi, k) {
+  const coeffs = new Uint8Array(k)
+  let state = ((esi + 1) * 0x9e3779b1) >>> 0
+  if (state === 0) state = 0xdeadbeef
+  let nonzero = false
+  for (let i = 0; i < k; i++) {
+    state ^= (state << 13); state >>>= 0
+    state ^= (state >>> 17)
+    state ^= (state << 5); state >>>= 0
+    coeffs[i] = state & 0xff
+    if (coeffs[i] !== 0) nonzero = true
+  }
+  if (!nonzero) coeffs[esi % k] = 1
+  return coeffs
+}
+
+// The coefficient vector of ANY encoding symbol id. esi < k is systematic
+// (unit vector e_esi); esi >= k is a derived random row.
+function coeffsFor (esi, k) {
+  if (esi < k) {
+    const e = new Uint8Array(k)
+    e[esi] = 1
+    return e
+  }
+  return deriveCoeffs(esi, k)
+}
+
 /**
- * RFC 6330 systematic RaptorQ encoder over one group of source blocks.
+ * Systematic GF(256) random-linear fountain encoder over one group.
  */
 class Encoder {
   /**
-   * @param {Buffer[]} blocks - the K source blocks of one group
+   * @param {Buffer[]} blocks - the k source blocks of one group
    * @param {{ symbolSize?: number }} [opts]
    */
   constructor (blocks, opts = {}) {
     if (!Array.isArray(blocks) || blocks.length === 0 || !blocks.every(b4a.isBuffer)) {
       throw new Error('blocks must be a non-empty array of buffers')
     }
-    this.blocks = blocks
     this.k = blocks.length
-    this.symbolSize = opts.symbolSize || DEFAULT_SYMBOL_SIZE
+
+    let maxLen = opts.symbolSize || 0
+    for (const b of blocks) if (b.length > maxLen) maxLen = b.length
+    this.symbolSize = maxLen
+
+    // padded copies so every source symbol is exactly symbolSize bytes
+    this.lengths = blocks.map(b => b.length)
+    this.blocks = blocks.map(b => {
+      if (b.length === this.symbolSize) return b
+      const padded = b4a.alloc(this.symbolSize)
+      b4a.copy(b, padded)
+      return padded
+    })
   }
 
   /**
-   * Produce encoding symbols. esi < k returns the (padded) source symbol,
-   * esi >= k requires the LT + LDPC/HDPC precode machinery.
-   * @param {number} esi - encoding symbol id
-   * @returns {Buffer} symbolSize-byte symbol
+   * The symbolSize-byte encoding symbol for id `esi`.
+   * esi < k returns the (padded) source block verbatim; esi >= k returns a
+   * random linear combination of all k blocks over GF(256).
+   * @param {number} esi
+   * @returns {Buffer}
    */
   symbol (esi) {
-    throw new Error('not implemented: RFC 6330 encoding (GF(256) precode + LT layer)')
+    if (!Number.isInteger(esi) || esi < 0) throw new Error('esi must be a non-negative integer')
+    if (esi < this.k) return b4a.from(this.blocks[esi])
+
+    const coeffs = deriveCoeffs(esi, this.k)
+    const out = b4a.alloc(this.symbolSize)
+    for (let i = 0; i < this.k; i++) {
+      gf.addScaled(out, this.blocks[i], coeffs[i], this.symbolSize)
+    }
+    return out
+  }
+
+  /** Wire message for one symbol id. */
+  message (esi, group = 0) {
+    return { group, esi, k: this.k, symbol: this.symbol(esi) }
+  }
+
+  /** The k systematic wire messages (esi 0..k-1). */
+  systematicSymbols (group = 0) {
+    const out = new Array(this.k)
+    for (let esi = 0; esi < this.k; esi++) out[esi] = this.message(esi, group)
+    return out
   }
 
   /**
-   * Convenience: n repair symbols starting after the systematic range.
+   * n repair wire messages starting after the systematic range.
    * @param {number} n
+   * @param {number} [group]
+   * @param {number} [startEsi]
    * @returns {{ group: number, esi: number, k: number, symbol: Buffer }[]}
    */
-  repairSymbols (n) {
-    throw new Error('not implemented: RFC 6330 repair symbol generation')
+  repairSymbols (n, group = 0, startEsi = this.k) {
+    if (!Number.isInteger(n) || n < 0) throw new Error('n must be a non-negative integer')
+    const out = new Array(n)
+    for (let i = 0; i < n; i++) out[i] = this.message(startEsi + i, group)
+    return out
   }
 }
 
 /**
- * RFC 6330 decoder: collect any k + epsilon symbols of a group, then solve.
+ * GF(256) fountain decoder: feed any received symbols; once k linearly
+ * independent ones are in, reconstruct the k source blocks. Uses online
+ * Gauss-Jordan elimination (kept in reduced row echelon form), so decode()
+ * is an O(k) read-out once the rank hits k.
  */
 class Decoder {
   /**
    * @param {number} k - source symbols in this group
-   * @param {{ symbolSize?: number }} [opts]
+   * @param {{ symbolSize?: number, lengths?: number[] }} [opts]
    */
   constructor (k, opts = {}) {
     if (!Number.isInteger(k) || k <= 0) throw new Error('k must be a positive integer')
     this.k = k
     this.symbolSize = opts.symbolSize || DEFAULT_SYMBOL_SIZE
-    this.received = new Map() // esi -> symbol
+    this.lengths = opts.lengths || null
+    this.rank = 0
+    this.received = 0
+    // pivots[col] = { coef: Uint8Array(k), data: Uint8Array(symbolSize) }
+    // kept normalized (coef[col] === 1) and reduced against all other pivots
+    this.pivots = new Array(k).fill(null)
   }
 
   /**
-   * Feed one received symbol. Returns true once enough symbols are buffered
-   * that decoding is likely to succeed (>= k).
+   * Feed one received symbol. Returns true once k independent symbols are in
+   * (i.e. the group is decodable).
    * @param {{ esi: number, symbol: Buffer }} sym
-   * @returns {boolean} ready to attempt decode
+   * @returns {boolean} decodable
    */
   add (sym) {
     if (!sym || !Number.isInteger(sym.esi) || !b4a.isBuffer(sym.symbol)) {
       throw new Error('symbol must be { esi, symbol }')
     }
-    this.received.set(sym.esi, sym.symbol)
-    return this.received.size >= this.k
+    this.received++
+
+    if (sym.symbol.length !== this.symbolSize) {
+      if (this.received === 1 && !this._sizeLocked) this.symbolSize = sym.symbol.length
+      else if (sym.symbol.length !== this.symbolSize) {
+        throw new Error('symbol size ' + sym.symbol.length + ' != ' + this.symbolSize)
+      }
+    }
+    this._sizeLocked = true
+
+    if (this.rank >= this.k) return true
+
+    const coef = coeffsFor(sym.esi, this.k) // Uint8Array(k)
+    const data = new Uint8Array(this.symbolSize)
+    data.set(sym.symbol)
+
+    // reduce the incoming row against existing pivots
+    for (let col = 0; col < this.k; col++) {
+      const f = coef[col]
+      if (f === 0) continue
+      const p = this.pivots[col]
+      if (p) {
+        gf.addScaled(coef, p.coef, f, this.k)
+        gf.addScaled(data, p.data, f, this.symbolSize)
+      }
+    }
+
+    // find the leading (pivot) column of the reduced row
+    let pivotCol = -1
+    for (let col = 0; col < this.k; col++) {
+      if (coef[col] !== 0) { pivotCol = col; break }
+    }
+    if (pivotCol === -1) return this.rank >= this.k // linearly dependent, drop
+
+    // normalize so coef[pivotCol] === 1
+    const invLead = gf.inv(coef[pivotCol])
+    gf.scale(coef, invLead, this.k)
+    gf.scale(data, invLead, this.symbolSize)
+
+    // eliminate pivotCol from every existing pivot row (keep full RREF)
+    for (let col = 0; col < this.k; col++) {
+      const p = this.pivots[col]
+      if (!p) continue
+      const f = p.coef[pivotCol]
+      if (f === 0) continue
+      gf.addScaled(p.coef, coef, f, this.k)
+      gf.addScaled(p.data, data, f, this.symbolSize)
+    }
+
+    this.pivots[pivotCol] = { coef, data }
+    this.rank++
+    return this.rank >= this.k
+  }
+
+  get decodable () {
+    return this.rank >= this.k
   }
 
   /**
-   * Solve the decoding matrix and return the k source blocks.
+   * Reconstruct the k source blocks. Requires rank === k.
    * @returns {Buffer[]}
    */
   decode () {
-    if (this.received.size < this.k) {
-      throw new Error('need at least k symbols before decoding (' + this.received.size + '/' + this.k + ')')
+    if (this.rank < this.k) {
+      throw new Error('need k independent symbols before decoding (' + this.rank + '/' + this.k + ')')
     }
-    throw new Error('not implemented: RFC 6330 decoding (gaussian elimination over GF(256))')
+    const out = new Array(this.k)
+    for (let i = 0; i < this.k; i++) {
+      // RREF => pivots[i].coef === e_i, so pivots[i].data is source symbol i
+      const data = this.pivots[i].data
+      const len = this.lengths ? this.lengths[i] : this.symbolSize
+      out[i] = b4a.from(data.subarray(0, len))
+    }
+    return out
   }
 }
 
 /**
  * Attach the raptorq extension to a hypercore (or session). Symbols received
- * from peers are decoded off the wire and handed to `handlers.onsymbol`.
- *
- * This part is real: it rides hypercore's extension channel, so symbols
- * flow over live replication streams today.
+ * from peers are handed to `handlers.onsymbol`. This rides hypercore's
+ * extension channel, so symbols flow over live replication streams today.
  *
  * @param {import('hypercore')} core
  * @param {{ onsymbol?: (message, peer) => void }} [handlers]
@@ -143,16 +287,20 @@ function attach (core, handlers = {}) {
 
   return {
     extension: ext,
-    send (symbol, peer) {
-      ext.send(symbol, peer)
-    },
-    broadcast (symbol) {
-      ext.broadcast(symbol)
-    },
-    destroy () {
-      ext.destroy()
-    }
+    send (symbol, peer) { ext.send(symbol, peer) },
+    broadcast (symbol) { ext.broadcast(symbol) },
+    destroy () { ext.destroy() }
   }
+}
+
+// Convenience wire helpers so consumers without compact-encoding on their
+// own dependency path can still frame/parse symbols.
+function encodeSymbol (message) {
+  return c.encode(symbolEncoding, message)
+}
+
+function decodeSymbol (buffer) {
+  return c.decode(symbolEncoding, buffer)
 }
 
 module.exports = {
@@ -160,6 +308,10 @@ module.exports = {
   Encoder,
   Decoder,
   symbolEncoding,
+  encodeSymbol,
+  decodeSymbol,
+  coeffsFor,
+  gf,
   constants: {
     EXTENSION_NAME,
     DEFAULT_SYMBOL_SIZE,

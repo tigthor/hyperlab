@@ -11,17 +11,24 @@ The whole Holepunch stack is classically cryptographic — every SecretStream ke
 ## API
 
 ```js
-const { PQSecretStream, selectMode, bindModes, combineSecrets, keygen, encapsulate, decapsulate, constants } = require('pq-secretstream')
+const { selectMode, bindModes, combineSecrets, keygen, encapsulate, decapsulate, initiate, respond, finalize, PQSecretStream } = require('pq-secretstream')
 
-// real today
+// negotiation + transcript binding (real)
 const mode = selectMode(['classical', 'hybrid'], remoteModes, { requireHybrid: true })
-const digest = bindModes(['classical', 'hybrid']) // mix into the Noise handshake hash
+const digest = bindModes(['classical', 'hybrid']) // mixed into the derived session key
 const secret = combineSecrets(x25519Secret, mlkemSecret) // 32-byte hybrid secret
 
-// throws 'not implemented' until a bare-pqcrypto backend lands
+// real ML-KEM-768, delegated to @noble/post-quantum (FIPS 203)
 const { publicKey, secretKey } = keygen()
 const { ciphertext, sharedSecret } = encapsulate(publicKey)
-const same = decapsulate(ciphertext, secretKey)
+const same = decapsulate(ciphertext, secretKey) // === sharedSecret
+
+// real hybrid KEM key agreement (X25519 + ML-KEM-768), two messages:
+const { state, offer } = initiate({ modes: ['classical', 'hybrid'], requireHybrid: true })
+const r = respond(offer, { modes: ['classical', 'hybrid'], requireHybrid: true })
+const i = finalize(state, r.message) // i.sessionKey === r.sessionKey
+
+// still throws — the full Noise wire + first-message fragmentation is not built
 const stream = new PQSecretStream(true, rawStream, { modes: ['hybrid'] })
 ```
 
@@ -35,4 +42,13 @@ Downgrade protection is two-sided: `selectMode({ requireHybrid })` makes a class
 
 ## Status
 
-Skeleton. Negotiation, transcript binding and the secret combiner are real and tested; KEM ops and the wire layer throw `not implemented` pending bare-pqcrypto (BARE-1).
+Real: ML-KEM-768 keygen/encapsulate/decapsulate (noble FIPS 203), the X25519 half, mode negotiation, transcript binding, the secret combiner, and a real two-message **hybrid KEM key agreement** (`initiate`/`respond`/`finalize`) where both sides derive a byte-identical session key from `combineSecrets(X25519_dh, MLKEM_ss)` with both peers' offered-mode digests mixed in — so a stripped-hybrid transcript yields a *different* key (downgrade detection is cryptographic, not cosmetic). Tested in `test/basic.test.js` (13 tests): honest-run key agreement, both downgrade halves, and tampered-X25519 / wrong-ML-KEM-ciphertext divergence.
+
+Still stub: the full Noise wire integration + first-message fragmentation (`PQSecretStream` throws `not implemented`).
+
+### Gate (measured, `harness/bench/pq-handshake.js`)
+
+Claim: hybrid first message >1 KB (needs fragmentation) **and** adds <1 ms CPU vs classical. Baseline `firstMessageBytes=116`, latency ~2.2 ms.
+
+- First-message key material grows to **1216 B** (X25519 pk 32 + ML-KEM pk 1184), response **1120 B** (32 + ct 1088) — both past a single UDP datagram. **Fragmentation cost is real: PASS.**
+- Added CPU (median, this machine, pure-JS noble): **~1.37 ms** over the full classical two-party handshake, dominated by the ML-KEM keygen+encapsulate+decapsulate triple (~1.34 ms). This is **above** the <1 ms claim. The book's <1 ms figure is for optimized/native (TLS 1.3) ML-KEM; Chapter 7's native constant-time addon is exactly what would bring this under 1 ms. **On pure-JS: FAIL the <1 ms half.**

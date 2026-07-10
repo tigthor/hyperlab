@@ -8,3 +8,4 @@ harness/bench/results/
 harness/hyperlab-smoke-*/
 labs/**/build/
 labs/**/prebuilds/
+the-sovereign-stack.md

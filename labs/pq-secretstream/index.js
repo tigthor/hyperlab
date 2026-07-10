@@ -8,6 +8,7 @@
 
 const sodium = require('sodium-universal')
 const b4a = require('b4a')
+const { ml_kem768 } = require('@noble/post-quantum/ml-kem.js')
 
 // FIPS 203 (final, 2024-08-13) ML-KEM-768 parameter sizes
 const MLKEM768 = {
@@ -29,6 +30,7 @@ const MODES = [MODE_CLASSICAL, MODE_HYBRID]
 
 const NS_COMBINE = b4a.from('pq-secretstream/combine/v0')
 const NS_MODES = b4a.from('pq-secretstream/modes/v0')
+const NS_SESSION = b4a.from('pq-secretstream/session/v0')
 
 /**
  * Pick the strongest handshake mode both peers support.
@@ -103,11 +105,12 @@ function combineSecrets (classicalSecret, pqSecret) {
 }
 
 /**
- * Generate an ML-KEM-768 keypair.
+ * Generate an ML-KEM-768 keypair. Delegates to @noble/post-quantum (FIPS 203).
  * @returns {{ publicKey: Buffer, secretKey: Buffer }}
  */
 function keygen () {
-  throw new Error('not implemented: ML-KEM-768 keygen (needs a bare-pqcrypto backend)')
+  const kp = ml_kem768.keygen()
+  return { publicKey: b4a.from(kp.publicKey), secretKey: b4a.from(kp.secretKey) }
 }
 
 /**
@@ -116,17 +119,150 @@ function keygen () {
  * @returns {{ ciphertext: Buffer, sharedSecret: Buffer }}
  */
 function encapsulate (publicKey) {
-  throw new Error('not implemented: ML-KEM-768 encapsulation (needs a bare-pqcrypto backend)')
+  if (!b4a.isBuffer(publicKey) || publicKey.byteLength !== MLKEM768.publicKeyBytes) {
+    throw new Error('publicKey must be a ' + MLKEM768.publicKeyBytes + '-byte buffer')
+  }
+  const r = ml_kem768.encapsulate(publicKey)
+  return { ciphertext: b4a.from(r.cipherText), sharedSecret: b4a.from(r.sharedSecret) }
 }
 
 /**
  * Decapsulate a ciphertext with our ML-KEM-768 secret key.
+ * ML-KEM has implicit rejection: a tampered ciphertext does not error, it
+ * yields a deterministic but *different* pseudo-random secret — which is what
+ * makes the derived session key diverge instead of leaking the failure.
  * @param {Buffer} ciphertext - 1088-byte ciphertext
  * @param {Buffer} secretKey - 2400-byte secret key
  * @returns {Buffer} 32-byte shared secret
  */
 function decapsulate (ciphertext, secretKey) {
-  throw new Error('not implemented: ML-KEM-768 decapsulation (needs a bare-pqcrypto backend)')
+  if (!b4a.isBuffer(ciphertext) || ciphertext.byteLength !== MLKEM768.ciphertextBytes) {
+    throw new Error('ciphertext must be a ' + MLKEM768.ciphertextBytes + '-byte buffer')
+  }
+  if (!b4a.isBuffer(secretKey) || secretKey.byteLength !== MLKEM768.secretKeyBytes) {
+    throw new Error('secretKey must be a ' + MLKEM768.secretKeyBytes + '-byte buffer')
+  }
+  return b4a.from(ml_kem768.decapsulate(ciphertext, secretKey))
+}
+
+// --- classical X25519 half -------------------------------------------------
+
+/**
+ * Generate an ephemeral X25519 keypair.
+ * @returns {{ publicKey: Buffer, secretKey: Buffer }}
+ */
+function x25519Keygen () {
+  const publicKey = b4a.alloc(X25519.publicKeyBytes)
+  const secretKey = b4a.alloc(X25519.secretKeyBytes)
+  sodium.randombytes_buf(secretKey)
+  sodium.crypto_scalarmult_base(publicKey, secretKey)
+  return { publicKey, secretKey }
+}
+
+function x25519Dh (secretKey, remotePublicKey) {
+  const out = b4a.alloc(X25519.sharedSecretBytes)
+  sodium.crypto_scalarmult(out, secretKey, remotePublicKey)
+  return out
+}
+
+/**
+ * Derive the final 32-byte session key from the hybrid secret and the
+ * transcript-bound negotiation. The offered-mode digests of BOTH peers are
+ * mixed in (positional: initiator first, responder second), so if a MITM
+ * tampers with either offered-mode list the two sides feed different digests
+ * here and their session keys diverge — cryptographic downgrade detection, not
+ * a cosmetic policy check.
+ *
+ * @param {Buffer} hybridSecret - output of combineSecrets(dh, mlkemSs)
+ * @param {string} negotiatedMode
+ * @param {Buffer} initiatorModesDigest - bindModes(initiator's offered modes)
+ * @param {Buffer} responderModesDigest - bindModes(responder's offered modes)
+ * @returns {Buffer} 32-byte session key
+ */
+function deriveSessionKey (hybridSecret, negotiatedMode, initiatorModesDigest, responderModesDigest) {
+  const out = b4a.alloc(32)
+  sodium.crypto_generichash_batch(out, [
+    NS_SESSION,
+    hybridSecret,
+    b4a.from(negotiatedMode),
+    initiatorModesDigest,
+    responderModesDigest
+  ])
+  return out
+}
+
+/**
+ * Initiator step 1. Produces the offer (first handshake message) and the
+ * private state needed to finalize. The offer carries an X25519 ephemeral
+ * public key (32 B) and an ML-KEM-768 public key (1184 B) — the interactive
+ * pattern from Chapter 5 where the responder's KEM key is not pre-known, so the
+ * ML-KEM public key rides in the first message. That first message is 1216+
+ * bytes of key material, past a single UDP datagram — the fragmentation cost.
+ *
+ * @param {{ modes?: string[], requireHybrid?: boolean }} [opts]
+ * @returns {{ state: object, offer: { modes: string[], x25519pk: Buffer, mlkemPk: Buffer } }}
+ */
+function initiate (opts = {}) {
+  const modes = opts.modes || [MODE_CLASSICAL, MODE_HYBRID]
+  const requireHybrid = !!opts.requireHybrid
+  const x = x25519Keygen()
+  const k = keygen()
+  const state = {
+    modes,
+    requireHybrid,
+    x25519sk: x.secretKey,
+    x25519pk: x.publicKey,
+    mlkemSk: k.secretKey,
+    mlkemPk: k.publicKey
+  }
+  const offer = { modes: modes.slice(), x25519pk: x.publicKey, mlkemPk: k.publicKey }
+  return { state, offer }
+}
+
+/**
+ * Responder step. Consumes the initiator's offer, runs selectMode (policy-half
+ * downgrade check, hard-fails under requireHybrid), performs the X25519 DH and
+ * ML-KEM encapsulation, and derives the session key. Returns the session key
+ * and the response message (second handshake message).
+ *
+ * @param {{ modes: string[], x25519pk: Buffer, mlkemPk: Buffer }} offer
+ * @param {{ modes?: string[], requireHybrid?: boolean }} [opts]
+ * @returns {{ sessionKey: Buffer, mode: string, message: { modes: string[], x25519pk: Buffer, ciphertext: Buffer } }}
+ */
+function respond (offer, opts = {}) {
+  const modes = opts.modes || [MODE_CLASSICAL, MODE_HYBRID]
+  const requireHybrid = !!opts.requireHybrid
+  const mode = selectMode(modes, offer.modes, { requireHybrid })
+
+  const x = x25519Keygen()
+  const dh = x25519Dh(x.secretKey, offer.x25519pk)
+  const { ciphertext, sharedSecret } = encapsulate(offer.mlkemPk)
+  const hybrid = combineSecrets(dh, sharedSecret)
+
+  const sessionKey = deriveSessionKey(hybrid, mode, bindModes(offer.modes), bindModes(modes))
+  const message = { modes: modes.slice(), x25519pk: x.publicKey, ciphertext }
+  return { sessionKey, mode, message }
+}
+
+/**
+ * Initiator step 2. Consumes the responder's message, re-checks the negotiated
+ * mode against its own policy, performs the matching X25519 DH and ML-KEM
+ * decapsulation, and derives the session key. In an honest run this equals the
+ * responder's key byte-for-byte.
+ *
+ * @param {object} state - the state returned by initiate()
+ * @param {{ modes: string[], x25519pk: Buffer, ciphertext: Buffer }} message
+ * @returns {{ sessionKey: Buffer, mode: string }}
+ */
+function finalize (state, message) {
+  const mode = selectMode(state.modes, message.modes, { requireHybrid: state.requireHybrid })
+
+  const dh = x25519Dh(state.x25519sk, message.x25519pk)
+  const sharedSecret = decapsulate(message.ciphertext, state.mlkemSk)
+  const hybrid = combineSecrets(dh, sharedSecret)
+
+  const sessionKey = deriveSessionKey(hybrid, mode, bindModes(state.modes), bindModes(message.modes))
+  return { sessionKey, mode }
 }
 
 /**
@@ -157,6 +293,9 @@ module.exports = {
   keygen,
   encapsulate,
   decapsulate,
+  initiate,
+  respond,
+  finalize,
   constants: {
     MODE_CLASSICAL,
     MODE_HYBRID,

@@ -29,6 +29,7 @@ const receiptEncoding = {
     c.uint.preencode(state, r.bytes)
     c.uint.preencode(state, r.sequence)
     c.uint.preencode(state, r.timestamp)
+    c.fixed32.preencode(state, r.nonce)
   },
   encode (state, r) {
     c.uint.encode(state, r.version)
@@ -38,6 +39,7 @@ const receiptEncoding = {
     c.uint.encode(state, r.bytes)
     c.uint.encode(state, r.sequence)
     c.uint.encode(state, r.timestamp)
+    c.fixed32.encode(state, r.nonce)
   },
   decode (state) {
     return {
@@ -47,7 +49,8 @@ const receiptEncoding = {
       channel: c.fixed32.decode(state),
       bytes: c.uint.decode(state),
       sequence: c.uint.decode(state),
-      timestamp: c.uint.decode(state)
+      timestamp: c.uint.decode(state),
+      nonce: c.fixed32.decode(state)
     }
   }
 }
@@ -83,17 +86,26 @@ function keyPair (seed) {
 
 /**
  * Build an unsigned receipt, validating every field.
- * @param {{ provider: Buffer, consumer: Buffer, channel: Buffer, bytes: number, sequence: number, timestamp?: number }} opts
+ *
+ * `nonce` (32 bytes, random by default) makes each receipt uniquely
+ * identifiable and is bound into the signature, so no two distinct receipts
+ * ever share a signable pre-image even if every other field is identical.
+ *
+ * @param {{ provider: Buffer, consumer: Buffer, channel: Buffer, bytes: number, sequence: number, timestamp?: number, nonce?: Buffer }} opts
  * @returns {object} unsigned receipt
  */
-function createReceipt ({ provider, consumer, channel, bytes, sequence, timestamp = Date.now() }) {
-  for (const [name, key] of [['provider', provider], ['consumer', consumer], ['channel', channel]]) {
+function createReceipt ({ provider, consumer, channel, bytes, sequence, timestamp = Date.now(), nonce }) {
+  if (nonce === undefined) {
+    nonce = b4a.alloc(32)
+    sodium.randombytes_buf(nonce)
+  }
+  for (const [name, key] of [['provider', provider], ['consumer', consumer], ['channel', channel], ['nonce', nonce]]) {
     if (!b4a.isBuffer(key) || key.byteLength !== 32) throw new Error(name + ' must be a 32-byte buffer')
   }
   for (const [name, n] of [['bytes', bytes], ['sequence', sequence], ['timestamp', timestamp]]) {
     if (!Number.isSafeInteger(n) || n < 0) throw new Error(name + ' must be a non-negative safe integer')
   }
-  return { version: VERSION, provider, consumer, channel, bytes, sequence, timestamp }
+  return { version: VERSION, provider, consumer, channel, bytes, sequence, timestamp, nonce }
 }
 
 function signable (receipt) {
@@ -121,12 +133,16 @@ function signReceipt (receipt, secretKey) {
  * @returns {boolean}
  */
 function verifyReceipt (signedReceipt) {
-  const { signature, ...receipt } = signedReceipt
-  if (!b4a.isBuffer(signature) || signature.byteLength !== sodium.crypto_sign_BYTES) return false
+  // A null / non-object input is just "not a valid receipt", never a crash.
+  if (signedReceipt === null || typeof signedReceipt !== 'object') return false
+  // The whole body is guarded: a structurally malformed receipt (missing /
+  // wrong-typed fields, or even a hostile property getter that throws) makes
+  // the destructure, the compact encoding, or sodium throw - that is just
+  // "not a valid receipt", so it verifies false instead of crashing the caller.
   try {
-    // A structurally malformed receipt (missing / wrong-typed fields) makes
-    // the compact encoding or sodium throw - that is just "not a valid
-    // receipt", so it verifies false instead of crashing the caller.
+    const { signature, ...receipt } = signedReceipt
+    if (!b4a.isBuffer(signature) || signature.byteLength !== sodium.crypto_sign_BYTES) return false
+    if (!b4a.isBuffer(receipt.consumer) || receipt.consumer.byteLength !== 32) return false
     return sodium.crypto_sign_verify_detached(signature, signable(receipt), receipt.consumer)
   } catch {
     return false
@@ -161,14 +177,25 @@ function decodeReceipt (buffer) {
  *   signature; otherwise invalid receipts are dropped and counted
  * @returns {{ claims: object[], totalBytes: number, invalid: number }}
  */
+// Read r.sequence for an error message without letting a hostile getter throw.
+function seqLabel (r) {
+  try {
+    if (r == null || typeof r !== 'object') return '(none)'
+    return String(r.sequence)
+  } catch {
+    return '(none)'
+  }
+}
+
 function aggregate (signedReceipts, opts = {}) {
+  if (!Array.isArray(signedReceipts)) throw new Error('signedReceipts must be an array')
   const strict = opts.strict !== false
   const best = new Map()
   let invalid = 0
 
   for (const r of signedReceipts) {
     if (!verifyReceipt(r)) {
-      if (strict) throw new Error('invalid receipt signature at sequence ' + r.sequence)
+      if (strict) throw new Error('invalid receipt signature at sequence ' + seqLabel(r))
       invalid++
       continue
     }

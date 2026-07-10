@@ -22,19 +22,16 @@ test('symbol message roundtrips through compact-encoding', function (t) {
   t.alike(c.decode(rq.symbolEncoding, buf), m)
 })
 
-test('encoder/decoder honest skeleton', function (t) {
-  const blocks = [b4a.from('a'), b4a.from('b')]
+test('encoder/decoder api validation', function (t) {
+  const blocks = [b4a.from('aa'), b4a.from('bb')]
   const enc = new rq.Encoder(blocks)
   t.is(enc.k, 2)
-  t.exception(() => enc.symbol(3), /not implemented/)
-  t.exception(() => enc.repairSymbols(2), /not implemented/)
+  t.is(enc.symbolSize, 2)
+  t.ok(b4a.equals(enc.symbol(0), blocks[0]), 'systematic symbol 0')
+  t.is(enc.repairSymbols(2).length, 2)
   t.exception(() => new rq.Encoder([]), /non-empty array/)
-
-  const dec = new rq.Decoder(2)
-  t.is(dec.add({ esi: 0, symbol: b4a.from('x') }), false)
-  t.is(dec.add({ esi: 5, symbol: b4a.from('y') }), true)
-  t.exception(() => dec.decode(), /not implemented/)
-  t.exception(() => new rq.Decoder(2).decode(), /need at least k symbols/)
+  t.exception(() => new rq.Decoder(0), /positive integer/)
+  t.exception(() => new rq.Decoder(2).decode(), /need k independent symbols/)
 })
 
 test('symbols flow over live hypercore replication', async function (t) {

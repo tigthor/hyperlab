@@ -8,6 +8,7 @@
     "test": "brittle test/*.test.js"
   },
   "dependencies": {
+    "@noble/curves": "^2.2.0",
     "b4a": "^1.6.4",
     "hyperbeam": "workspace:*",
     "hyperdht": "workspace:*",

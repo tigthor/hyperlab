@@ -103,6 +103,166 @@ test('aggregate keeps highest cumulative receipt per channel', function (t) {
   t.is(lax.totalBytes, 350)
 })
 
+test('adversarial: field-swap forgery is rejected', function (t) {
+  const { provider, consumer, channel } = fixtures()
+  const signed = rm.signReceipt(rm.createReceipt({
+    provider: provider.publicKey,
+    consumer: consumer.publicKey,
+    channel,
+    bytes: 65536,
+    sequence: 1
+  }), consumer.secretKey)
+
+  // swap provider <-> consumer: signature was bound to the original layout
+  t.absent(rm.verifyReceipt({ ...signed, provider: signed.consumer, consumer: signed.provider }),
+    'provider/consumer swap fails')
+  // bump the version field (also signed)
+  t.absent(rm.verifyReceipt({ ...signed, version: 2 }), 'version tamper fails')
+  // move the timestamp (bound field)
+  t.absent(rm.verifyReceipt({ ...signed, timestamp: signed.timestamp + 1 }), 'timestamp tamper fails')
+  // change sequence
+  t.absent(rm.verifyReceipt({ ...signed, sequence: signed.sequence + 1 }), 'sequence tamper fails')
+})
+
+test('adversarial: cross-core (cross-channel) replay is rejected', function (t) {
+  const { provider, consumer, channel } = fixtures()
+  const otherChannel = b4a.alloc(32).fill(7)
+  const signed = rm.signReceipt(rm.createReceipt({
+    provider: provider.publicKey,
+    consumer: consumer.publicKey,
+    channel,
+    bytes: 65536,
+    sequence: 1
+  }), consumer.secretKey)
+
+  // replay the same signed receipt against a different core/channel
+  t.absent(rm.verifyReceipt({ ...signed, channel: otherChannel }), 'channel-swap replay fails')
+
+  // aggregate must not credit the replayed receipt to the other channel
+  const { claims } = rm.aggregate([signed, { ...signed, channel: otherChannel }], { strict: false })
+  t.is(claims.length, 1, 'only the genuine channel is credited')
+  t.ok(b4a.equals(claims[0].channel, channel), 'credited channel is the signed one')
+})
+
+test('adversarial: tampered byte count is rejected', function (t) {
+  const { provider, consumer, channel } = fixtures()
+  const signed = rm.signReceipt(rm.createReceipt({
+    provider: provider.publicKey,
+    consumer: consumer.publicKey,
+    channel,
+    bytes: 1000,
+    sequence: 1
+  }), consumer.secretKey)
+
+  t.absent(rm.verifyReceipt({ ...signed, bytes: 1000000 }), 'inflated bytes fails')
+  t.absent(rm.verifyReceipt({ ...signed, bytes: 0 }), 'deflated bytes fails')
+
+  // through the wire: flip the encoded bytes then decode
+  const buf = rm.encodeReceipt(signed)
+  const back = rm.decodeReceipt(buf)
+  t.ok(rm.verifyReceipt(back), 'untampered wire receipt still verifies')
+})
+
+test('adversarial: aggregate never crashes on malformed input', function (t) {
+  const { provider, consumer, channel } = fixtures()
+  const good = rm.signReceipt(rm.createReceipt({
+    provider: provider.publicKey,
+    consumer: consumer.publicKey,
+    channel,
+    bytes: 500,
+    sequence: 1
+  }), consumer.secretKey)
+
+  const junk = [
+    null,
+    undefined,
+    5,
+    'not-a-receipt',
+    {},
+    { signature: b4a.alloc(64) },
+    { signature: b4a.alloc(64), consumer: b4a.alloc(32) },
+    { ...good, signature: undefined },
+    { ...good, provider: b4a.alloc(4) },
+    { ...good, bytes: -1 }
+  ]
+
+  // lax mode: drops every bad entry, counts them, keeps the one good claim
+  const lax = rm.aggregate([...junk, good], { strict: false })
+  t.is(lax.invalid, junk.length, 'all malformed receipts counted invalid')
+  t.is(lax.claims.length, 1, 'the one valid receipt survives')
+  t.is(lax.totalBytes, 500)
+
+  // strict mode: throws honestly rather than crashing, even with null present
+  t.exception(() => rm.aggregate([null], { strict: true }), /invalid receipt signature/)
+  t.exception(() => rm.aggregate([{}], { strict: true }), /invalid receipt signature/)
+
+  // non-array input is a clean throw, not a TypeError from iteration
+  t.exception(() => rm.aggregate(null), /must be an array/)
+  t.exception(() => rm.aggregate({ length: 1 }), /must be an array/)
+
+  // verifyReceipt itself never throws on hostile input
+  for (const bad of junk) t.absent(rm.verifyReceipt(bad))
+})
+
+test('adversarial: nonce is bound and unique per receipt', function (t) {
+  const { provider, consumer, channel } = fixtures()
+  const base = { provider: provider.publicKey, consumer: consumer.publicKey, channel, bytes: 1, sequence: 0, timestamp: 1 }
+
+  const a = rm.createReceipt(base)
+  const b = rm.createReceipt(base)
+  t.is(a.nonce.byteLength, 32, 'nonce is 32 bytes')
+  t.absent(b4a.equals(a.nonce, b.nonce), 'two receipts with identical fields still get distinct nonces')
+
+  const signed = rm.signReceipt(a, consumer.secretKey)
+  t.ok(rm.verifyReceipt(signed), 'signed receipt with nonce verifies')
+  // tampering the nonce breaks the signature (nonce is inside the signed pre-image)
+  t.absent(rm.verifyReceipt({ ...signed, nonce: b4a.alloc(32).fill(0xff) }), 'nonce tamper fails')
+  // a wrong-sized nonce must not crash verify - just fail
+  t.absent(rm.verifyReceipt({ ...signed, nonce: b4a.alloc(4) }), 'short nonce fails, no crash')
+  t.exception(() => rm.createReceipt({ ...base, nonce: b4a.alloc(4) }), /nonce must be a 32-byte buffer/)
+})
+
+test('adversarial: nonce survives the wire and stays bound', function (t) {
+  const { provider, consumer, channel } = fixtures()
+  const signed = rm.signReceipt(rm.createReceipt({
+    provider: provider.publicKey,
+    consumer: consumer.publicKey,
+    channel,
+    bytes: 777,
+    sequence: 3
+  }), consumer.secretKey)
+
+  const back = rm.decodeReceipt(rm.encodeReceipt(signed))
+  t.ok(b4a.equals(back.nonce, signed.nonce), 'nonce roundtrips through the wire')
+  t.ok(rm.verifyReceipt(back), 'still verifies with nonce after roundtrip')
+})
+
+test('adversarial: hostile property getter cannot crash verify or aggregate', function (t) {
+  const { provider, consumer, channel } = fixtures()
+  const good = rm.signReceipt(rm.createReceipt({
+    provider: provider.publicKey,
+    consumer: consumer.publicKey,
+    channel,
+    bytes: 500,
+    sequence: 1
+  }), consumer.secretKey)
+
+  const boomConsumer = { signature: b4a.alloc(64), get consumer () { throw new Error('boom') } }
+  const boomSeq = { signature: b4a.alloc(64), consumer: b4a.alloc(32), get sequence () { throw new Error('boom') } }
+
+  t.absent(rm.verifyReceipt(boomConsumer), 'throwing getter verifies false, not a crash')
+  t.absent(rm.verifyReceipt(boomSeq), 'throwing sequence getter verifies false, not a crash')
+
+  // lax aggregate swallows them as invalid
+  const lax = rm.aggregate([boomConsumer, boomSeq, good], { strict: false })
+  t.is(lax.invalid, 2, 'both hostile objects counted invalid')
+  t.is(lax.claims.length, 1)
+  t.is(lax.totalBytes, 500)
+
+  // strict aggregate throws the honest accounting error, not the getter's error
+  t.exception(() => rm.aggregate([boomSeq], { strict: true }), /invalid receipt signature/)
+})
+
 test('settlement throws honestly', async function (t) {
   await t.exception(() => rm.settle({ claims: [] }), /not implemented/)
 })
