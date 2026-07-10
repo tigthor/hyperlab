@@ -171,6 +171,29 @@ async function codedTransfer ({ k, blockSize, loss, latencyMs = 0, jitterMs = 0,
     let nextEsi = 0
     const cap = Math.ceil(k / Math.max(0.01, 1 - loss)) * 2 + 16
 
+    // A repair round must size itself from a rank that has FULLY SETTLED after
+    // the last batch — never from a stale or half-arrived rank. When we send a
+    // batch we clear `feedbackSinceBatch` and stamp `lastBatchAt`; every rank
+    // report from the receiver sets `feedbackSinceBatch` and refreshes
+    // latestRank.
+    //
+    // The old code sized every round as `deficit = k - latestRank` on a fixed
+    // RTT timer. When the very first timer tick won the race against the
+    // systematic burst's loopback round-trip, latestRank was still the initial
+    // 0, so deficit=k and the sender flooded a WHOLE extra batch (~132k) — the
+    // bimodality. A weaker "wait for one feedback" guard fixes the k-flood but
+    // still over-sends when the tick lands mid-trickle: the 64 systematic rank
+    // reports arrive as a burst spread over a few event-loop turns, so a round
+    // that sizes from the FIRST of them (rank ~35) sends ~30 needless symbols.
+    //
+    // So we size a round only once latestRank has STOPPED CLIMBING (settled)
+    // across a poll interval: the systematic round's rank is then fully
+    // reflected (~61 at 5% loss) and the deficit is the true residual (~3).
+    // While latestRank===0 (systematic feedback not back yet — the reverse path
+    // is LOSSLESS so it is guaranteed to arrive) we only poll, never flood.
+    let feedbackSinceBatch = false
+    let lastBatchAt = Date.now()
+
     sender.on('message', function (buf) {
       if (buf.length >= 1 && buf[0] === 1) { // done ACK
         senderStopped = true
@@ -180,32 +203,61 @@ async function codedTransfer ({ k, blockSize, loss, latencyMs = 0, jitterMs = 0,
       if (buf.length >= 3 && buf[0] === 0) {
         const r = buf[1] | (buf[2] << 8)
         if (r > latestRank) latestRank = r
+        feedbackSinceBatch = true
       }
     })
 
     const sendBatch = function (n) {
+      let sent = 0
       for (let i = 0; i < n && nextEsi < cap; i++) {
         const b = encodeSymbol(enc.message(nextEsi++))
         sender.send(b, link.port, link.host, function () {})
         wire.fwdBytes += b.length
         wire.symbolsSent++
+        sent++
       }
+      // this batch's effect on the receiver's rank is not yet observed; the
+      // next repair round must wait for it to settle before sizing again.
+      if (sent > 0) { feedbackSinceBatch = false; lastBatchAt = Date.now() }
     }
 
     // round 0: the k systematic symbols (all are needed on any link)
     sendBatch(k)
 
-    // subsequent rounds, one per RTT: top up exactly the remaining deficit.
-    // Spacing by RTT means the previous batch is reflected in latestRank
-    // before we decide again, so we never re-request in-flight symbols and
-    // total sent converges to ~k/(1-loss).
+    // A short poll used while we wait for the current batch's rank to settle —
+    // much smaller than a full RTT so we react promptly, without ever guessing.
+    const pollMs = Math.max(2, Math.floor(rttMs / 4))
+    // A generous lost-batch timeout: if a whole repair batch is dropped on the
+    // (lossy) forward path, NO feedback ever comes, so `settled` can never fire
+    // — after this long with no fresh feedback we resend the true residual
+    // deficit (those symbols are gone, not in flight, so no double count). It
+    // is set well above any real settle time so it never preempts natural
+    // settling of a delivered batch.
+    const lostBatchMs = Math.max(40, rttMs * 4)
+
+    // Subsequent rounds: top up exactly the remaining deficit, sized from a
+    // settled rank. `settled` = we have fresh feedback for the last batch AND
+    // latestRank did not change over the last poll (the burst has fully
+    // arrived). Otherwise we either wait (still climbing / not back yet) or, if
+    // a full lost-batch timeout has elapsed with no feedback, resend the
+    // residual. The latestRank===0 guard blocks the flood: it forces a wait for
+    // the guaranteed systematic feedback rather than sizing from the stale
+    // initial rank. Net: total sent converges to ~k/(1-loss), unimodal.
+    let rankAtPrevPoll = -1
     const roundTick = function () {
       if (senderStopped || wire.decoded || nextEsi >= cap) return
+      const settled = feedbackSinceBatch && latestRank === rankAtPrevPoll
+      const lostTimeout = (Date.now() - lastBatchAt) >= lostBatchMs
+      rankAtPrevPoll = latestRank
+      if (latestRank === 0 || !(settled || lostTimeout)) {
+        track(setTimeout(roundTick, pollMs))
+        return
+      }
       const deficit = k - latestRank
       if (deficit > 0) sendBatch(deficit)
-      track(setTimeout(roundTick, rttMs))
+      track(setTimeout(roundTick, pollMs))
     }
-    track(setTimeout(roundTick, rttMs))
+    track(setTimeout(roundTick, pollMs))
 
     const result = await completion
 
@@ -285,22 +337,37 @@ async function run (opts = {}) {
   const jitterMs = opts.jitterMs || 0
   const losses = opts.losses || LOSS_SWEEP
 
+  // want/have bytes-to-completion is nondeterministic under loss (UDX
+  // retransmission timing), so take the MEDIAN of `reps` transfers on both sides
+  // before comparing. The coded side is near-deterministic; the median absorbs
+  // want/have's timing luck so the gate does not flake on CI. Default 1 rep
+  // locally; CI passes --reps=3.
+  const reps = opts.reps || 1
   const rows = []
   for (const loss of losses) {
-    const wantHave = await wantHaveTransfer({ k, blockSize, loss, latencyMs, jitterMs, seed })
-    const coded = await codedTransfer({ k, blockSize, loss, latencyMs, jitterMs, seed })
-
-    const winner = coded.bytesToCompletion < wantHave.bytesToCompletion ? 'coded' : 'want-have'
-    const ratio = coded.bytesToCompletion / wantHave.bytesToCompletion
+    const whBytes = []
+    const codedBytes = []
+    let lastWH = null
+    let lastCoded = null
+    for (let i = 0; i < reps; i++) {
+      lastWH = await wantHaveTransfer({ k, blockSize, loss, latencyMs, jitterMs, seed: seed + i })
+      lastCoded = await codedTransfer({ k, blockSize, loss, latencyMs, jitterMs, seed: seed + i })
+      whBytes.push(lastWH.bytesToCompletion)
+      codedBytes.push(lastCoded.bytesToCompletion)
+    }
+    const wantHaveBytes = median(whBytes)
+    const codedByteCount = median(codedBytes)
+    const ratio = codedByteCount / wantHaveBytes
     rows.push({
       loss,
-      wantHaveBytes: wantHave.bytesToCompletion,
-      codedBytes: coded.bytesToCompletion,
-      wantHaveOverheadPerBlock: round(wantHave.bytesPerBlockOverhead),
-      codedOverheadPerBlock: round(coded.bytesPerBlockOverhead),
-      codedOverheadSymbols: coded.overheadSymbols,
+      wantHaveBytes,
+      codedBytes: codedByteCount,
+      wantHaveOverheadPerBlock: round(lastWH.bytesPerBlockOverhead),
+      codedOverheadPerBlock: round(lastCoded.bytesPerBlockOverhead),
+      codedOverheadSymbols: lastCoded.overheadSymbols,
+      reps,
       savingsPct: round((1 - ratio) * 100),
-      winner
+      winner: codedByteCount < wantHaveBytes ? 'coded' : 'want-have'
     })
   }
 
@@ -348,12 +415,21 @@ function round (n) {
   return Math.round(n * 100) / 100
 }
 
+function median (xs) {
+  const s = xs.slice().sort(function (a, b) { return a - b })
+  const m = s.length >> 1
+  return s.length % 2 === 1 ? s[m] : (s[m - 1] + s[m]) / 2
+}
+
 if (require.main === module) {
   run({
     k: intFlag('--k=', DEFAULT_K),
     blockSize: intFlag('--block=', DEFAULT_BLOCK_SIZE),
     latencyMs: intFlag('--latency=', 0),
-    jitterMs: intFlag('--jitter=', 0)
+    jitterMs: intFlag('--jitter=', 0),
+    reps: intFlag('--reps=', 1),
+    seed: intFlag('--seed=', DEFAULT_SEED),
+    losses: listFlag('--losses=', null)
   })
     .then(function (out) {
       console.log(JSON.stringify(out, null, 2))
@@ -370,5 +446,12 @@ if (require.main === module) {
     if (!arg) return dflt
     const v = Number(arg.slice(prefix.length))
     return Number.isFinite(v) ? v : dflt
+  }
+
+  function listFlag (prefix, dflt) {
+    const arg = process.argv.find(a => a.startsWith(prefix))
+    if (!arg) return dflt
+    const parts = arg.slice(prefix.length).split(',').map(Number).filter(Number.isFinite)
+    return parts.length ? parts : dflt
   }
 }

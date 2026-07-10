@@ -126,9 +126,11 @@ jobs:
         # locally on the machine that recorded the baseline.
         run: node harness/bench/run.js --check --portable-only
 
-      - name: RaptorQ coded-replication gate (bounded)
+      - name: RaptorQ coded-replication gate (bounded, best-of-3)
+        # reps=3 medians: want/have's bytes-to-completion is nondeterministic
+        # under loss, so gate on the median to avoid flaking on its timing luck.
         run: |
-          node harness/bench/raptorq-gate.js --k=64 --block=1024 | tee raptorq-gate.out
+          node harness/bench/raptorq-gate.js --k=64 --block=1024 --reps=3 | tee raptorq-gate.out
           grep -q 'PASSES = true' raptorq-gate.out
 
       - name: PQ handshake gate (bounded, reported)
