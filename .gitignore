@@ -9,3 +9,4 @@ harness/hyperlab-smoke-*/
 labs/**/build/
 labs/**/prebuilds/
 the-sovereign-stack.md
+sovereign-stack-expansion.md
