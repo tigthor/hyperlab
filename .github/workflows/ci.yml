@@ -4,7 +4,13 @@ on:
   push:
   pull_request:
 
+# Jobs are independent (no `needs`) and matrix jobs set fail-fast: false, so a
+# red cell never cancels its siblings — every job/leg reports its own status.
+
 jobs:
+  # 1. Full workspace test matrix — harness + labs/* + apps/* (root `pnpm test`
+  #    now includes the apps) across the supported Node versions and OSes, plus
+  #    a quick bench smoke so the bench harness itself stays runnable.
   test:
     strategy:
       fail-fast: false
@@ -12,7 +18,7 @@ jobs:
         node: ['20.x', '22.x', '24.x']
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: checkout (with submodules)
         uses: actions/checkout@v4
@@ -33,12 +39,131 @@ jobs:
       - name: install
         run: pnpm install --frozen-lockfile
 
-      - name: harness + labs tests
+      - name: workspace tests (harness + labs + apps)
         run: pnpm test
 
       - name: bench smoke
         run: node harness/bench/run.js --quick
 
+  # 2. Lint / style. Uses the repo's linter when one is present (standard), and
+  #    otherwise falls back to a deterministic syntax sanity pass (node --check
+  #    over every index.js / cli.js). node --check never flaps, so this job is
+  #    blocking regardless of which branch it takes.
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: pnpm
+
+      - name: install
+        run: pnpm install --frozen-lockfile
+
+      - name: lint (standard if present, else syntax sanity)
+        run: |
+          if pnpm exec standard --version >/dev/null 2>&1; then
+            echo "standard is available — linting the workspace"
+            pnpm exec standard
+          else
+            echo "no standard linter in the workspace — running node --check syntax sanity"
+            found=0
+            while IFS= read -r -d '' f; do
+              found=$((found + 1))
+              echo "check: $f"
+              node --check "$f"
+            done < <(find labs apps harness -type f \( -name 'index.js' -o -name 'cli.js' \) -not -path '*/node_modules/*' -print0)
+            echo "syntax-checked $found file(s)"
+            test "$found" -gt 0
+          fi
+
+  # 3. Decision gates — the benches that must not regress. `run.js --check` is
+  #    the 15% regression gate (compares against the recorded full baseline);
+  #    the RaptorQ fountain-coding gate must beat want/have bytes-to-completion
+  #    on a lossy link. Both are blocking. The PQ handshake/append gate benches
+  #    are run in bounded form as a reported signal (their CPU sub-gate is
+  #    hardware-dependent — pure-JS ML-KEM — so it is surfaced, not asserted).
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: pnpm
+
+      - name: install
+        run: pnpm install --frozen-lockfile
+
+      - name: 15% regression gate (run.js --check)
+        run: node harness/bench/run.js --check
+
+      - name: RaptorQ coded-replication gate (bounded)
+        run: |
+          node harness/bench/raptorq-gate.js --k=64 --block=1024 | tee raptorq-gate.out
+          grep -q 'PASSES = true' raptorq-gate.out
+
+      - name: PQ handshake gate (bounded, reported)
+        run: node harness/bench/pq-handshake.js 500
+
+      - name: PQ append gate (quick, reported)
+        run: node harness/bench/pq-append.js --quick
+
+  # 4. Apps end-to-end — the shipping products. Their green status is a
+  #    first-class CI signal, so filedrop and the sync SDK get their own job.
+  apps-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: pnpm
+
+      - name: install
+        run: pnpm install --frozen-lockfile
+
+      - name: filedrop e2e
+        run: pnpm --filter ./apps/filedrop test
+
+      - name: sync-sdk e2e
+        run: pnpm --filter ./apps/sync-sdk test
+
+  # 5. Bare runtime parity — non-blocking (bare is a moving C runtime target).
   bare:
     runs-on: ubuntu-latest
     continue-on-error: true

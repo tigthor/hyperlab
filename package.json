@@ -3,7 +3,7 @@
   "private": true,
   "description": "Meta-repo for the Holepunch fork & research program: Track A (upstreamable) forks as submodules under packages/, Track B (sovereign) research packages under labs/, and the test/bench harness under harness/.",
   "scripts": {
-    "test": "pnpm -r --filter ./harness --filter './labs/*' test",
+    "test": "pnpm -r --filter ./harness --filter './labs/*' --filter './apps/*' test",
     "bench": "pnpm --filter ./harness bench",
     "baseline": "pnpm --filter ./harness baseline",
     "sync": "bash tools/sync-upstream.sh",

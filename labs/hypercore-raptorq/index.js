@@ -64,18 +64,25 @@ function leafHash (block) {
 }
 
 // Deterministic coefficient vector for a repair symbol, keyed by esi. Both
-// encoder and decoder call this, so no coefficients travel on the wire.
-// xorshift32 seeded from esi; the row is guaranteed non-zero.
+// encoder and decoder call this, so no coefficients travel on the wire. Each
+// coefficient is a splitmix32-style nonlinear hash of (esi, i): Math.imul is
+// NOT GF(2)-linear, and folding the column index i in gives every byte its own
+// mixing stream. The row is guaranteed non-zero.
+//
+// A plain xorshift32 PRNG will NOT do here: xorshift steps are all XOR/shift,
+// i.e. GF(2)-linear, so an entire k-byte row becomes a fixed linear image of a
+// single 32-bit seed. The set of all such rows then spans a space of dimension
+// <= 32, which caps the achievable rank at 32 and makes repair-only decode
+// impossible for k > 32 (no matter how many repair symbols are generated).
 function deriveCoeffs (esi, k) {
   const coeffs = new Uint8Array(k)
-  let state = ((esi + 1) * 0x9e3779b1) >>> 0
-  if (state === 0) state = 0xdeadbeef
   let nonzero = false
   for (let i = 0; i < k; i++) {
-    state ^= (state << 13); state >>>= 0
-    state ^= (state >>> 17)
-    state ^= (state << 5); state >>>= 0
-    coeffs[i] = state & 0xff
+    let z = (Math.imul(esi + 1, 0x9e3779b1) ^ Math.imul(i + 1, 0x85ebca6b)) >>> 0
+    z = Math.imul(z ^ (z >>> 16), 0x21f0aaad) >>> 0
+    z = Math.imul(z ^ (z >>> 15), 0x735a2d97) >>> 0
+    z = (z ^ (z >>> 15)) >>> 0
+    coeffs[i] = z & 0xff
     if (coeffs[i] !== 0) nonzero = true
   }
   if (!nonzero) coeffs[esi % k] = 1

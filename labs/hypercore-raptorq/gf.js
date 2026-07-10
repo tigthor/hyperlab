@@ -67,6 +67,10 @@ function addScaled (dst, src, factor, len) {
 // dst[j] = factor * dst[j] in place (row normalization)
 function scale (dst, factor, len) {
   if (factor === 1) return
+  if (factor === 0) { // 0 * x = 0; LOG[0] is undefined so guard before the table
+    for (let j = 0; j < len; j++) dst[j] = 0
+    return
+  }
   const base = LOG[factor]
   for (let j = 0; j < len; j++) {
     const s = dst[j]
