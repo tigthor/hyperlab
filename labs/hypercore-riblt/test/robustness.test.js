@@ -172,3 +172,31 @@ test('honest stream still decodes exactly after all the robustness guards', func
   t.ok(sameSet(out.aOnly, aOnly))
   t.ok(sameSet(out.bOnly, bOnly))
 })
+
+// A flooder streams well-formed, correctly-indexed but BOGUS cells. After local-
+// set subtraction these never peel, so the decode never resolves — the only
+// defense is the maxCells effort ceiling. Assert it is BOUNDED (not the old 16M
+// multi-minute DoS): a tight caller-set maxCells caps it tightly, and the default
+// is a sane ceiling, and it never falsely reports success.
+test('untrusted flood of bogus indexed cells is bounded by maxCells', function (t) {
+  const { DEFAULT_MAX_CELLS } = require('..')
+  const r = rng(0xf100d)
+  const local = []
+  for (let i = 0; i < 450; i++) local.push(r())
+
+  // A malicious source: every cell carries the correct sequential index but a
+  // random count/sum/checksum (bogus). Cannot peel after local subtraction.
+  let idx = 0
+  const flood = () => ({ index: idx++, count: Number((r() % 7n) + 1n), sum: r(), checksum: r() })
+
+  // Tight caller ceiling → tightly bounded work and a clean failure.
+  const t0 = Date.now()
+  const out = reconcile(local, flood, { maxCells: 2000 })
+  const ms = Date.now() - t0
+  t.absent(out.success, 'flood never falsely succeeds')
+  t.ok(out.cellsUsed <= 2000, 'bounded by the caller maxCells (' + out.cellsUsed + ')')
+  t.ok(ms < 2000, 'returns quickly under a tight ceiling (' + ms + 'ms)')
+
+  // The default ceiling is sane (2^20), not the old indefensible 2^24.
+  t.ok(DEFAULT_MAX_CELLS <= (1 << 20), 'default maxCells is a sane ceiling, not 16M')
+})

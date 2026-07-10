@@ -322,10 +322,21 @@ class Decoder {
 // `remote` is either an Encoder or a zero-arg function returning the next
 // CodedSymbol. Pulls symbols until the difference decodes (rateless) or maxCells
 // is hit. Returns { aOnly, bOnly, cellsUsed, success }.
+const DEFAULT_MAX_CELLS = 1 << 20 // ~1M cells; effort ceiling against a flooder
+
 function reconcile (localSet, remote, opts) {
   const options = opts || {}
   const pull = typeof remote === 'function' ? remote : () => remote.produceSymbol()
-  const maxCells = options.maxCells || 1 << 24
+  // Effort ceiling. Reconciling with an UNTRUSTED peer is inherently
+  // effort-bounded: an attacker who streams valid-index but bogus cells can keep
+  // the difference "undecoded" forever (local-set subtraction destroys any
+  // injected cell's purity, so nothing peels and `remaining` never drains). We
+  // cannot make that garbage "succeed" — we can only cap how much we spend before
+  // returning success:false. The default caps a flood at ~1M cells (~22 MB /
+  // seconds), NOT the old indefensible 16M (~350 MB / minutes). For adversarial
+  // settings a caller SHOULD pass a tight maxCells ≈ 8 * expected_d (RIBLT decodes
+  // honest input in ~1.35*d cells), or authenticate the symbol stream.
+  const maxCells = options.maxCells || DEFAULT_MAX_CELLS
   const dec = new Decoder(toDistinct(localSet))
   // Pull at least one symbol; keep going while an undecoded difference remains.
   // Every difference element maps to cell 0, so once cell 0 is drained a zero
@@ -400,7 +411,15 @@ than N/8. So the N/8 comparison is an UPPER BOUND on RIBLT's real-world win.
 
 Failure rate: rateless decoding essentially never fails for honest random sets,
 but 0/250 trials only bounds the failure probability to ~1.2e-2 (rule of three).
-The gate now runs enough trials to actually bound it below 1e-3.`
+The gate now runs enough trials to actually bound it below 1e-3.
+
+Untrusted-peer DoS (fundamental): dropped/duplicated/reordered/truncated symbols
+and multiset inputs are detected and fail cleanly and cheaply. But a flooder
+sending well-formed, correctly-indexed, bogus cells cannot be made to "succeed" —
+after local-set subtraction its cells never peel, so the decode never resolves.
+The only defense is the maxCells effort ceiling (default 2^20). Pass a tight
+maxCells ≈ 8*expected_d, or authenticate the stream, when reconciling with an
+untrusted peer. This is inherent to unauthenticated set reconciliation.`
 
 module.exports = {
   Encoder,
@@ -414,5 +433,6 @@ module.exports = {
   cellIsPure,
   codedSymbolEncoding,
   toDistinct,
-  honestNote
+  honestNote,
+  DEFAULT_MAX_CELLS
 }
