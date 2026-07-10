@@ -5,3 +5,4 @@ packages:
   - '!packages/bare'
   - 'labs/*'
   - 'harness'
+  - 'apps/*'

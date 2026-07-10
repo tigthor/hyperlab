@@ -1,0 +1,18 @@
+{
+  "name": "p2p-sync",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Firebase for P2P: a local-first sync SDK packaging multi-writer (Autobase), storage (Corestore/Hyperbee), discovery (Hyperswarm) and auth behind one clean API. new SyncDB(topic); db.set(k,v); db.on('update').",
+  "main": "index.js",
+  "scripts": { "test": "brittle test/*.test.js" },
+  "dependencies": {
+    "b4a": "^1.6.4",
+    "autobase": "^7.6.0",
+    "hyperbee": "^2.20.0",
+    "corestore": "^7.11.0",
+    "hyperswarm": "workspace:*",
+    "hypercore": "workspace:*",
+    "hyperdht": "workspace:*"
+  },
+  "devDependencies": { "brittle": "^3.0.0", "hyperlab-harness": "workspace:*" }
+}

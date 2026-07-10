@@ -1,0 +1,19 @@
+{
+  "name": "filedrop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Encrypted serverless file-drop: PAKE-authenticated (CPace) beam over the DHT, chunked + resumable, with a signed proof-of-receipt. WeTransfer without a server. Built on hyperbeam + hyperbeam-pake + retrieval-market.",
+  "bin": { "filedrop": "./cli.js" },
+  "main": "index.js",
+  "scripts": { "test": "brittle test/*.test.js" },
+  "dependencies": {
+    "b4a": "^1.6.4",
+    "compact-encoding": "^3.0.0",
+    "hyperbeam-pake": "workspace:*",
+    "retrieval-market": "workspace:*",
+    "hyperdht": "workspace:*",
+    "hypercore-crypto": "^3.4.0",
+    "sodium-universal": "^5.0.1"
+  },
+  "devDependencies": { "brittle": "^3.0.0", "hyperlab-harness": "workspace:*" }
+}
