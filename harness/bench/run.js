@@ -110,18 +110,22 @@ const GATES = {
   }
 }
 
-// Machine-PORTABLE gated metrics: byte counts, sizes and ratios that are a
-// function of the protocol, not the CPU, so they are stable across machines and
-// valid to gate on CI against a baseline recorded elsewhere. Throughput
-// (appends/sec, MB/sec) and wall/latency (latencyMs, wallMs) are machine-LOCAL —
-// a slow CI runner is ~40-55% slower than a dev laptop, which is not a
-// regression — so `--portable-only` (used by CI) checks only these. A local
-// `--check` on the machine that recorded the baseline still gates everything.
+// Machine-PORTABLE gated metrics (bench.metric qualified): deterministic
+// functions of the protocol, stable across machines, so valid to gate on CI
+// against a baseline recorded on a different machine. Throughput (appends/sec,
+// MB/sec) and wall/latency are machine-LOCAL — a slow CI runner is ~40% slower
+// than a dev laptop, which is not a regression. And CLEAN-link byte counts are
+// deterministic (fixed sparse subset, no retransmissions), but LOSSY-link
+// bytes-to-completion is NOT portable: under loss the byte count depends on the
+// OS's UDX retransmission timing (measured >40% ubuntu-vs-macos), so it is
+// excluded here — the coded-vs-want/have RaptorQ comparison is same-machine
+// (the raptorq-gate CI job), not a cross-machine baseline. `--portable-only`
+// (used by CI) checks only this set; a local `--check` gates everything.
 const PORTABLE_METRICS = new Set([
-  'firstMessageBytes',
-  'wireEfficiency',
-  'totalBytesWired',
-  'bytesPerBlockOverhead'
+  'handshake.firstMessageBytes',
+  'replicate.wireEfficiency',
+  'replicate.totalBytesWired',
+  'replicate.bytesPerBlockOverhead'
 ])
 
 // Absolute noise floors for gated metrics, in the metric's own unit. A
@@ -242,18 +246,18 @@ function median (values) {
 function checkGates (benches, baseline, threshold = THRESHOLD, portableOnly = false) {
   const baseBenches = (baseline && baseline.benches) || {}
   const results = []
-  const keep = (m) => !portableOnly || PORTABLE_METRICS.has(m)
+  const keep = (name, m) => !portableOnly || PORTABLE_METRICS.has(name + '.' + m)
 
   for (const name of Object.keys(GATES)) {
     const current = benches[name] || {}
     const base = baseBenches[name] || {}
 
     for (const metric of GATES[name].higherIsBetter) {
-      if (!keep(metric)) continue
+      if (!keep(name, metric)) continue
       results.push(gateOne(name, metric, 'higher-is-better', current[metric], base[metric], threshold))
     }
     for (const metric of GATES[name].lowerIsBetter) {
-      if (!keep(metric)) continue
+      if (!keep(name, metric)) continue
       results.push(gateOne(name, metric, 'lower-is-better', current[metric], base[metric], threshold))
     }
   }
