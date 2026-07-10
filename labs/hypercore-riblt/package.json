@@ -1,0 +1,10 @@
+{
+  "name": "hypercore-riblt",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Rateless Invertible Bloom Lookup Table (RIBLT, SIGCOMM 2024) set reconciliation for hypercore block-availability — reconcile which blocks two peers hold in ~1.35*d coded cells instead of exchanging full bitfields. (Expansion No. 61)",
+  "main": "index.js",
+  "scripts": { "test": "brittle test/*.test.js" },
+  "dependencies": { "b4a": "^1.6.4", "compact-encoding": "^3.0.0" },
+  "devDependencies": { "brittle": "^3.0.0" }
+}
