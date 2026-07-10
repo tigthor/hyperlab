@@ -37,9 +37,6 @@ All 8 repos are forked to `tigthor/*` on GitHub. Each submodule's `origin`
 points at the fork; `upstream` points at `holepunchto/*` for
 `tools/sync-upstream.sh`.
 
-Note: `gh`/`git push` in this environment need the stale `GITHUB_TOKEN` env var
-unset — prefix with `env -u GITHUB_TOKEN` (valid keyring login sits underneath).
-
 ## Discipline
 
 - **One change = one topic branch = one PR.** `fix/…`, `perf/…`, `feat/…`. Never mix Track A into Track B.
