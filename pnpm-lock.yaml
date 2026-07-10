@@ -66,6 +66,9 @@ importers:
 
   labs/frost-multiwriter:
     dependencies:
+      '@noble/curves':
+        specifier: ^2.2.0
+        version: 2.2.0
       b4a:
         specifier: ^1.6.4
         version: 1.8.1

@@ -92,7 +92,7 @@ test('aggregate keeps highest cumulative receipt per channel', function (t) {
   const { claims, totalBytes, invalid } = rm.aggregate(receipts)
 
   t.is(claims.length, 2, 'one claim per channel')
-  t.is(totalBytes, 350, 'cumulative: 300 + 50, not the sum of every receipt')
+  t.is(totalBytes, 350n, 'cumulative: 300 + 50, not the sum of every receipt')
   t.is(invalid, 0)
 
   const tampered = { ...mk(channel, 400, 4), bytes: 4000 }
@@ -100,7 +100,7 @@ test('aggregate keeps highest cumulative receipt per channel', function (t) {
 
   const lax = rm.aggregate([...receipts, tampered], { strict: false })
   t.is(lax.invalid, 1, 'lax mode drops and counts bad receipts')
-  t.is(lax.totalBytes, 350)
+  t.is(lax.totalBytes, 350n)
 })
 
 test('adversarial: field-swap forgery is rejected', function (t) {
@@ -190,7 +190,7 @@ test('adversarial: aggregate never crashes on malformed input', function (t) {
   const lax = rm.aggregate([...junk, good], { strict: false })
   t.is(lax.invalid, junk.length, 'all malformed receipts counted invalid')
   t.is(lax.claims.length, 1, 'the one valid receipt survives')
-  t.is(lax.totalBytes, 500)
+  t.is(lax.totalBytes, 500n)
 
   // strict mode: throws honestly rather than crashing, even with null present
   t.exception(() => rm.aggregate([null], { strict: true }), /invalid receipt signature/)
@@ -257,10 +257,116 @@ test('adversarial: hostile property getter cannot crash verify or aggregate', fu
   const lax = rm.aggregate([boomConsumer, boomSeq, good], { strict: false })
   t.is(lax.invalid, 2, 'both hostile objects counted invalid')
   t.is(lax.claims.length, 1)
-  t.is(lax.totalBytes, 500)
+  t.is(lax.totalBytes, 500n)
 
   // strict aggregate throws the honest accounting error, not the getter's error
   t.exception(() => rm.aggregate([boomSeq], { strict: true }), /invalid receipt signature/)
+})
+
+test('adversarial: byte accounting is overflow-safe past 2^53 (BigInt exact)', function (t) {
+  const { consumer } = fixtures()
+  const provider = rm.keyPair(b4a.alloc(32).fill(1))
+  const MAX = Number.MAX_SAFE_INTEGER // 2^53 - 1, largest bytes createReceipt allows
+
+  // three separate channels, each claiming the maximum safe byte count. Summed
+  // as JS floats this rolls past 2^53 and loses precision; summed as BigInt it
+  // stays exact.
+  const mk = (fill) => rm.signReceipt(rm.createReceipt({
+    provider: provider.publicKey,
+    consumer: consumer.publicKey,
+    channel: b4a.alloc(32).fill(fill),
+    bytes: MAX,
+    sequence: 1
+  }), consumer.secretKey)
+
+  const receipts = [mk(10), mk(20), mk(30)]
+  const { claims, totalBytes } = rm.aggregate(receipts)
+
+  t.is(claims.length, 3, 'three distinct channels')
+  t.is(typeof totalBytes, 'bigint', 'totalBytes exposed as BigInt')
+
+  const exact = BigInt(MAX) * 3n
+  t.is(totalBytes, exact, 'BigInt total is exact: ' + exact)
+
+  // prove the naive float sum would have been WRONG (poisoned past 2^53)
+  const naiveFloat = MAX + MAX + MAX
+  t.not(BigInt(naiveFloat), exact, 'a float sum silently loses precision here')
+  t.ok(totalBytes > BigInt(Number.MAX_SAFE_INTEGER), 'total legitimately exceeds 2^53')
+})
+
+test('adversarial: decodeReceipt rejects trailing bytes (exact-length parse)', function (t) {
+  const { provider, consumer, channel } = fixtures()
+  const signed = rm.signReceipt(rm.createReceipt({
+    provider: provider.publicKey,
+    consumer: consumer.publicKey,
+    channel,
+    bytes: 4242,
+    sequence: 7
+  }), consumer.secretKey)
+
+  const buf = rm.encodeReceipt(signed)
+  t.alike(rm.decodeReceipt(buf), signed, 'a clean encoding still decodes')
+
+  // append hostile trailing garbage: a valid receipt with junk smuggled after it
+  const poisoned = b4a.concat([buf, b4a.from([0xde, 0xad, 0xbe, 0xef])])
+  t.exception(() => rm.decodeReceipt(poisoned), /trailing bytes/, 'trailing garbage rejected, not silently ignored')
+
+  // a single extra zero byte is still malformed
+  t.exception(() => rm.decodeReceipt(b4a.concat([buf, b4a.from([0])])), /trailing bytes/, 'one extra byte rejected')
+
+  // truncation is still a clean error, never a crash returning a bogus receipt
+  t.exception(() => rm.decodeReceipt(buf.subarray(0, buf.byteLength - 1)))
+  t.exception(() => rm.decodeReceipt('not a buffer'), /must be a buffer/)
+})
+
+test('adversarial: equivocation on a sequence is detected deterministically', function (t) {
+  const { provider, consumer, channel } = fixtures()
+  const otherChannel = b4a.alloc(32).fill(8)
+
+  const mk = (chan, bytes, sequence) => rm.signReceipt(rm.createReceipt({
+    provider: provider.publicKey,
+    consumer: consumer.publicKey,
+    channel: chan,
+    bytes,
+    sequence
+  }), consumer.secretKey)
+
+  // The consumer signs TWO different receipts for the same sequence on the same
+  // channel: seq=5/bytes=100 and seq=5/bytes=9999. Both verify (they are really
+  // signed), but the signer is contradicting itself on sequence 5.
+  const low = mk(channel, 100, 5)
+  const high = mk(channel, 9999, 5)
+  const honest = mk(otherChannel, 50, 1)
+
+  // insertion order A: low then high
+  const a = rm.aggregate([low, high, honest], { strict: false })
+  // insertion order B: high then low (reversed)
+  const b = rm.aggregate([high, low, honest], { strict: false })
+
+  t.is(a.equivocations.length, 1, 'equivocating channel flagged (order A)')
+  t.is(b.equivocations.length, 1, 'equivocating channel flagged (order B)')
+  t.ok(b4a.equals(a.equivocations[0].channel, channel), 'the equivocating channel is identified')
+
+  // the equivocating channel is EXCLUDED from claims/total in BOTH orders,
+  // so the credited total is not order-dependent (was: first-seen wins)
+  t.is(a.claims.length, 1, 'only the honest channel is credited (order A)')
+  t.is(b.claims.length, 1, 'only the honest channel is credited (order B)')
+  t.is(a.totalBytes, 50n, 'equivocating bytes never credited (order A)')
+  t.is(b.totalBytes, b.totalBytes, 'consistent')
+  t.is(a.totalBytes, b.totalBytes, 'total is identical regardless of insertion order')
+  t.ok(b4a.equals(a.claims[0].channel, otherChannel), 'the surviving claim is the honest channel')
+
+  // strict mode refuses to settle an equivocating batch at all
+  t.exception(() => rm.aggregate([low, high, honest]), /equivocating receipts detected/)
+
+  // two receipts with the SAME sequence and SAME content are NOT equivocation
+  // (idempotent duplicates), just deduped to one claim
+  const dupA = mk(otherChannel, 50, 1)
+  const dupSame = { ...dupA }
+  const dup = rm.aggregate([dupA, dupSame], { strict: false })
+  t.is(dup.equivocations.length, 0, 'identical duplicate is not equivocation')
+  t.is(dup.claims.length, 1)
+  t.is(dup.totalBytes, 50n)
 })
 
 test('settlement throws honestly', async function (t) {

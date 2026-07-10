@@ -159,12 +159,26 @@ function encodeReceipt (signedReceipt) {
 }
 
 /**
- * Decode a signed receipt.
+ * Decode a signed receipt with an EXACT-LENGTH parse.
+ *
+ * A receipt is a fixed self-delimiting record; any bytes past the end of a
+ * valid encoding are not part of the receipt, so trailing garbage is a
+ * malformed message and MUST be rejected rather than silently ignored (which
+ * would let an attacker smuggle bytes past the verifier, or two callers who
+ * disagree on framing accept "the same" receipt differently).
+ *
  * @param {Buffer} buffer
  * @returns {object} signed receipt
+ * @throws if buffer is not a buffer, is truncated, or has trailing bytes
  */
 function decodeReceipt (buffer) {
-  return c.decode(signedReceiptEncoding, buffer)
+  if (!b4a.isBuffer(buffer)) throw new Error('buffer must be a buffer')
+  const state = { start: 0, end: buffer.byteLength, buffer }
+  const r = signedReceiptEncoding.decode(state)
+  if (state.start !== state.end) {
+    throw new Error('trailing bytes after receipt (' + (state.end - state.start) + ' extra)')
+  }
+  return r
 }
 
 /**
@@ -172,10 +186,24 @@ function decodeReceipt (buffer) {
  * only the highest-sequence (cumulative) receipt per
  * (provider, consumer, channel), and totals the claimable bytes.
  *
+ * Soundness properties beyond signature checking:
+ *
+ *  - Byte accounting is done in BigInt, so summing many valid receipts can
+ *    never silently overflow JS's 2^53 safe-integer range into a poisoned /
+ *    lossy float total. `totalBytes` is returned as a BigInt.
+ *
+ *  - Equivocation is detected: a signer who issues two DIFFERENT receipts for
+ *    the same (provider, consumer, channel, sequence) — e.g. seq=5/bytes=100
+ *    and seq=5/bytes=9999 — is a signer contradicting itself on a sequence
+ *    number. Such a channel is deterministically flagged in `equivocations`
+ *    and EXCLUDED from `claims`/`totalBytes` regardless of insertion order,
+ *    rather than silently crediting whichever receipt happened to be seen
+ *    first.
+ *
  * @param {object[]} signedReceipts
  * @param {{ strict?: boolean }} [opts] - strict (default) throws on an invalid
  *   signature; otherwise invalid receipts are dropped and counted
- * @returns {{ claims: object[], totalBytes: number, invalid: number }}
+ * @returns {{ claims: object[], totalBytes: bigint, invalid: number, equivocations: object[] }}
  */
 // Read r.sequence for an error message without letting a hostile getter throw.
 function seqLabel (r) {
@@ -187,10 +215,25 @@ function seqLabel (r) {
   }
 }
 
+// (provider, consumer, channel) identity for a *verified* receipt.
+function channelKey (r) {
+  return b4a.toString(r.provider, 'hex') + b4a.toString(r.consumer, 'hex') + b4a.toString(r.channel, 'hex')
+}
+
+// Content fingerprint of the signed pre-image: two verified receipts share a
+// fingerprint iff every signed field (incl. bytes, timestamp, nonce) matches.
+// ed25519 detached signatures are deterministic, so the unsigned body is a
+// sufficient identity for "the same receipt".
+function receiptFingerprint (r) {
+  return b4a.toString(c.encode(receiptEncoding, r), 'hex')
+}
+
 function aggregate (signedReceipts, opts = {}) {
   if (!Array.isArray(signedReceipts)) throw new Error('signedReceipts must be an array')
   const strict = opts.strict !== false
-  const best = new Map()
+  const best = new Map() // channelKey -> highest-sequence verified receipt
+  const seqPrints = new Map() // channelKey -> Map(sequence -> fingerprint)
+  const equivocating = new Set() // channelKeys that contradicted themselves
   let invalid = 0
 
   for (const r of signedReceipts) {
@@ -199,16 +242,40 @@ function aggregate (signedReceipts, opts = {}) {
       invalid++
       continue
     }
-    const key = b4a.toString(r.provider, 'hex') + b4a.toString(r.consumer, 'hex') + b4a.toString(r.channel, 'hex')
+    const key = channelKey(r)
+
+    // Equivocation detection is order-independent: for each sequence number we
+    // remember the first fingerprint seen; any later *different* fingerprint at
+    // the same sequence marks the whole channel as equivocating. Because it is
+    // a set-membership test, the outcome does not depend on receipt order.
+    let sp = seqPrints.get(key)
+    if (!sp) { sp = new Map(); seqPrints.set(key, sp) }
+    const fp = receiptFingerprint(r)
+    const prev = sp.get(r.sequence)
+    if (prev === undefined) sp.set(r.sequence, fp)
+    else if (prev !== fp) equivocating.add(key)
+
     const cur = best.get(key)
     if (!cur || r.sequence > cur.sequence) best.set(key, r)
   }
 
-  const claims = [...best.values()]
-  let totalBytes = 0
-  for (const r of claims) totalBytes += r.bytes
+  const claims = []
+  const equivocations = []
+  let totalBytes = 0n
+  for (const [key, r] of best) {
+    if (equivocating.has(key)) {
+      equivocations.push({ provider: r.provider, consumer: r.consumer, channel: r.channel })
+      continue
+    }
+    claims.push(r)
+    totalBytes += BigInt(r.bytes) // BigInt: cannot silently overflow past 2^53
+  }
 
-  return { claims, totalBytes, invalid }
+  if (strict && equivocations.length > 0) {
+    throw new Error('equivocating receipts detected on ' + equivocations.length + ' channel(s)')
+  }
+
+  return { claims, totalBytes, invalid, equivocations }
 }
 
 /**

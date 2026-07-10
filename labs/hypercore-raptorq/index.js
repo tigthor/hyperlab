@@ -19,6 +19,10 @@
 const c = require('compact-encoding')
 const b4a = require('b4a')
 const gf = require('./gf')
+// The real hypercore leaf hash (BLAKE2b with the LEAF domain-separation
+// prefix), reached through hypercore's own dependency so the digest we verify
+// against is byte-identical to the leaf hash a peer holds in its Merkle tree.
+const crypto = require('hypercore/node_modules/hypercore-crypto')
 
 const EXTENSION_NAME = 'hyperlab/raptorq'
 const DEFAULT_SYMBOL_SIZE = 1024 // T: bytes per encoding symbol
@@ -48,6 +52,15 @@ const symbolEncoding = {
       symbol: c.buffer.decode(state)
     }
   }
+}
+
+// The hypercore leaf hash of one block: BLAKE2b over the LEAF-typed encoding
+// of the block bytes (crypto.data). This is exactly the digest hypercore
+// stores at a tree leaf, so a decoded block can be authenticated against the
+// hash a peer already holds — a forged/corrupt repair symbol that perturbs
+// the reconstruction changes at least one block and is caught here.
+function leafHash (block) {
+  return crypto.data(block)
 }
 
 // Deterministic coefficient vector for a repair symbol, keyed by esi. Both
@@ -170,6 +183,14 @@ class Decoder {
     this.k = k
     this.symbolSize = opts.symbolSize || DEFAULT_SYMBOL_SIZE
     this.lengths = opts.lengths || null
+    // Optional expected leaf hashes (k of them). When present, decode()
+    // authenticates every reconstructed block against its hash and REJECTS
+    // the group if any mismatches, so a tampered repair symbol can never
+    // silently corrupt output.
+    this.hashes = opts.hashes || null
+    if (this.hashes && this.hashes.length !== k) {
+      throw new Error('hashes must have exactly k entries')
+    }
     this.rank = 0
     this.received = 0
     // pivots[col] = { coef: Uint8Array(k), data: Uint8Array(symbolSize) }
@@ -260,7 +281,25 @@ class Decoder {
       const len = this.lengths ? this.lengths[i] : this.symbolSize
       out[i] = b4a.from(data.subarray(0, len))
     }
+    if (this.hashes) this.authenticate(out)
     return out
+  }
+
+  /**
+   * Authenticate reconstructed blocks against the expected leaf hashes.
+   * Throws (rejecting the whole group) on the first mismatch, so a corrupt
+   * or forged repair symbol that perturbed the reconstruction is caught
+   * rather than returned as silently-wrong data.
+   * @param {Buffer[]} blocks
+   */
+  authenticate (blocks) {
+    if (!this.hashes) throw new Error('decoder has no expected hashes to authenticate against')
+    for (let i = 0; i < this.k; i++) {
+      if (!b4a.equals(leafHash(blocks[i]), this.hashes[i])) {
+        throw new Error('block ' + i + ' failed authentication (leaf hash mismatch)')
+      }
+    }
+    return true
   }
 }
 
@@ -311,6 +350,7 @@ module.exports = {
   encodeSymbol,
   decodeSymbol,
   coeffsFor,
+  leafHash,
   gf,
   constants: {
     EXTENSION_NAME,

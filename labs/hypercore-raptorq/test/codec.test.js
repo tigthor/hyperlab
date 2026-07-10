@@ -1,6 +1,6 @@
 const test = require('brittle')
 const b4a = require('b4a')
-const { Encoder, Decoder } = require('..')
+const { Encoder, Decoder, leafHash } = require('..')
 
 // deterministic pseudo-random block content
 function makeBlocks (k, size, seed = 1) {
@@ -112,4 +112,79 @@ test('decode() throws before rank k; extra symbols after decodable are harmless'
   dec.add(enc.message(enc.k))
   const out = dec.decode()
   for (let i = 0; i < enc.k; i++) t.ok(b4a.equals(out[i], blocks[i]))
+})
+
+// --- authentication of the reconstruction (repair symbols are untrusted) ----
+
+test('leafHash matches the hypercore leaf hash and is deterministic', function (t) {
+  const b = b4a.from('a source block')
+  const h = leafHash(b)
+  t.is(h.length, 32, 'blake2b-256 leaf hash')
+  t.ok(b4a.equals(leafHash(b), h), 'deterministic')
+  t.absent(b4a.equals(leafHash(b4a.from('a source block!')), h), 'differs on content')
+})
+
+test('decode() authenticates blocks against expected leaf hashes (honest path)', function (t) {
+  const k = 16
+  const blocks = makeBlocks(k, 256, 5)
+  const hashes = blocks.map(leafHash)
+  const enc = new Encoder(blocks)
+  const dec = new Decoder(k, { symbolSize: enc.symbolSize, hashes })
+  // decode purely from repair symbols; authentication must pass
+  for (const m of enc.repairSymbols(k + 4)) if (dec.add(m)) break
+  const out = dec.decode()
+  for (let i = 0; i < k; i++) t.ok(b4a.equals(out[i], blocks[i]), 'block ' + i)
+})
+
+test('Decoder rejects a hashes array that is not length k', function (t) {
+  t.exception(() => new Decoder(4, { hashes: [leafHash(b4a.from('x'))] }), /exactly k entries/)
+})
+
+// A tampered repair symbol that becomes a pivot corrupts the reconstruction;
+// authentication REJECTS it — the output is never silently wrong.
+test('tampered repair symbol used as a pivot is REJECTED, not silently wrong', function (t) {
+  const k = 16
+  const blocks = makeBlocks(k, 512, 71)
+  const hashes = blocks.map(leafHash)
+  const enc = new Encoder(blocks)
+  const dec = new Decoder(k, { symbolSize: enc.symbolSize, hashes })
+
+  // feed k-1 systematic symbols (missing block k-1), then ONE repair symbol
+  // with a flipped byte — it supplies the missing pivot, so block k-1 is
+  // reconstructed from corrupt data.
+  const sys = enc.systematicSymbols()
+  for (let i = 0; i < k - 1; i++) t.absent(dec.add(sys[i]), 'not decodable yet at ' + i)
+
+  const tampered = enc.message(k) // first repair symbol
+  tampered.symbol = b4a.from(tampered.symbol)
+  tampered.symbol[0] ^= 0xff // flip a byte
+
+  t.ok(dec.add(tampered), 'reached rank k (tampered symbol became the last pivot)')
+
+  // reconstruction is corrupt -> authentication throws, never returns bad data
+  t.exception(() => dec.decode(), /failed authentication/, 'rejected corrupt reconstruction')
+})
+
+// With enough honest symbols the group decodes BEFORE the tampered symbol is
+// needed; the tampered symbol is linearly dependent and dropped -> correct.
+test('tampered repair symbol dropped when honest symbols suffice -> recovers correctly', function (t) {
+  const k = 16
+  const blocks = makeBlocks(k, 512, 71)
+  const hashes = blocks.map(leafHash)
+  const enc = new Encoder(blocks)
+  const dec = new Decoder(k, { symbolSize: enc.symbolSize, hashes })
+
+  // all k systematic symbols -> full rank; the tampered symbol arrives after
+  const sys = enc.systematicSymbols()
+  let decodable = false
+  for (const m of sys) decodable = dec.add(m)
+  t.ok(decodable, 'decodable from honest systematic symbols')
+
+  const tampered = enc.message(k)
+  tampered.symbol = b4a.from(tampered.symbol)
+  tampered.symbol[0] ^= 0xff
+  dec.add(tampered) // ignored: rank already k
+
+  const out = dec.decode() // authenticates and passes
+  for (let i = 0; i < k; i++) t.ok(b4a.equals(out[i], blocks[i]), 'block ' + i + ' correct')
 })

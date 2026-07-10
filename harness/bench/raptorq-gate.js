@@ -40,7 +40,7 @@ const b4a = require('b4a')
 const { createLossyLink } = require('../lossy-link')
 const replicate = require('./replicate')
 // required by path (the codec is a workspace sibling, not a harness dep)
-const { Encoder, Decoder, encodeSymbol, decodeSymbol } = require('../../labs/hypercore-raptorq')
+const { Encoder, Decoder, encodeSymbol, decodeSymbol, leafHash } = require('../../labs/hypercore-raptorq')
 
 const DEFAULT_K = 64
 const DEFAULT_BLOCK_SIZE = 4096
@@ -58,16 +58,35 @@ async function codedTransfer ({ k, blockSize, loss, latencyMs = 0, jitterMs = 0,
   for (let i = 0; i < k; i++) source[i] = replicate.makeBlock(seed, i, blockSize)
 
   const enc = new Encoder(source, { symbolSize: blockSize })
-  const dec = new Decoder(k, { symbolSize: blockSize })
+  // The receiver holds the authenticated leaf hashes (in a real system these
+  // arrive over hypercore's verified tree messages); decode() authenticates
+  // every reconstructed block against them and REJECTS on any mismatch, so a
+  // forged repair symbol cannot silently corrupt the output.
+  const hashes = source.map(leafHash)
+  const dec = new Decoder(k, { symbolSize: blockSize, hashes })
 
   const receiver = dgram.createSocket('udp4')
   let sender = null
   let link = null
 
-  // shared completion state; snapshotting bytesSent at the decode instant is
-  // the true "bytes-to-completion" (counts symbols still in flight, fair)
-  const wire = { bytesSent: 0, symbolsSent: 0, done: false }
-  let ackBytes = 0
+  // One estimated round-trip time over the simulated link (forward + return,
+  // plus a jitter/scheduling margin). Flow-control rounds are spaced by this
+  // so a batch is reflected in the receiver's rank before the next round.
+  const rttMs = 2 * (latencyMs + jitterMs) + 8
+
+  // Forward wire accounting (sender -> receiver symbol bytes) and reverse
+  // accounting (receiver -> sender feedback bytes). bytesToCompletion counts
+  // BOTH directions up to the decode instant, matching want/have's two-peer
+  // byte total. `senderStopped` is set ONLY when the sender's socket receives
+  // a link-delivered completion ACK — real flow control, not a shared flag.
+  const wire = { fwdBytes: 0, symbolsSent: 0, revBytes: 0, decoded: false }
+  let senderStopped = false
+  let resolveStopped = null
+  const stoppedPromise = new Promise(function (r) { resolveStopped = r })
+
+  // reverse feedback framing: [0, rankLo, rankHi] = rank report, [1] = done
+  function rankMsg (rank) { return b4a.from([0, rank & 0xff, (rank >> 8) & 0xff]) }
+  const doneMsg = b4a.from([1])
 
   try {
     await bind(receiver)
@@ -83,24 +102,43 @@ async function codedTransfer ({ k, blockSize, loss, latencyMs = 0, jitterMs = 0,
     sender = dgram.createSocket('udp4')
     await bind(sender)
 
-    const completion = new Promise(function (resolve, reject) {
-      const timer = setTimeout(function () {
-        reject(new Error('coded transfer timed out at loss=' + loss + ' (sent ' + wire.symbolsSent + ', rank ' + dec.rank + '/' + k + ')'))
-      }, 30000)
+    let doneTimer = null
+    const timers = new Set()
+    const track = function (t) { timers.add(t); return t }
 
+    const completion = new Promise(function (resolve, reject) {
+      const timer = track(setTimeout(function () {
+        reject(new Error('coded transfer timed out at loss=' + loss + ' (sent ' + wire.symbolsSent + ', rank ' + dec.rank + '/' + k + ')'))
+      }, 30000))
+
+      let senderAddr = null
       receiver.on('message', function (buf, rinfo) {
-        if (wire.done) return
+        senderAddr = rinfo
+        if (wire.decoded) return
         let m
         try { m = decodeSymbol(buf) } catch { return }
         const decodable = dec.add({ esi: m.esi, symbol: m.symbol })
+
+        // report current rank back to the sender so it can pace repair
+        // (feedback drives the sender's flow control; rank is monotonic)
+        const rep = rankMsg(dec.rank)
+        wire.revBytes += rep.length
+        receiver.send(rep, rinfo.port, rinfo.address, function () {})
+
         if (!decodable) return
 
-        // reached rank k: snapshot bytes-to-completion, verify, ack, resolve
-        wire.done = true
-        const bytesAtDecode = wire.bytesSent
+        // reached rank k: snapshot bytes-to-completion, authenticate, ack
+        wire.decoded = true
+        const bytesAtDecode = wire.fwdBytes + wire.revBytes
         const symbolsAtDecode = wire.symbolsSent
 
-        const out = dec.decode()
+        let out
+        try {
+          out = dec.decode() // authenticates against leaf hashes; throws on tamper
+        } catch (err) {
+          clearTimeout(timer)
+          return reject(err)
+        }
         let verified = 0
         for (let i = 0; i < k; i++) {
           if (!b4a.equals(out[i], source[i])) {
@@ -110,33 +148,77 @@ async function codedTransfer ({ k, blockSize, loss, latencyMs = 0, jitterMs = 0,
           verified++
         }
 
-        // completion ACK back to the sender (through the link)
-        const ack = b4a.from('done')
-        ackBytes = ack.length
-        receiver.send(ack, rinfo.port, rinfo.address, function () {})
+        // completion ACK back to the sender (through the link), retransmitted
+        // a few times over ~RTT so it survives loss; the sender STOPS on it.
+        let acksLeft = 6
+        const sendAck = function () {
+          if (acksLeft-- <= 0) { clearTimeout(doneTimer); return }
+          receiver.send(doneMsg, rinfo.port, rinfo.address, function () {})
+          doneTimer = track(setTimeout(sendAck, Math.max(4, rttMs / 2)))
+        }
+        sendAck()
 
         clearTimeout(timer)
         resolve({ bytesAtDecode, symbolsAtDecode, verified })
       })
     })
 
-    // sender: stream symbols esi = 0,1,2,... until the receiver decodes
-    // (wire.done) or a generous cap is hit. Paced one-per-tick so the event
-    // loop delivers arrivals and the decode can stop the stream promptly.
-    const cap = Math.ceil(k / Math.max(0.01, 1 - loss)) * 3 + 32
-    ;(function sendNext (esi) {
-      if (wire.done || esi >= cap) return
-      const msg = enc.message(esi)
-      const buf = encodeSymbol(msg)
-      sender.send(buf, link.port, link.host, function () {})
-      wire.bytesSent += buf.length
-      wire.symbolsSent++
-      setImmediate(sendNext, esi + 1)
-    })(0)
+    // sender flow control. latestRank is refreshed by receiver feedback; the
+    // sender only ever has ~one round's worth of symbols in flight, so the
+    // decode-instant overshoot is bounded to <= 1 RTT of the current deficit
+    // (not the old blind flood). It stops the instant the link delivers 'done'.
+    let latestRank = 0
+    let nextEsi = 0
+    const cap = Math.ceil(k / Math.max(0.01, 1 - loss)) * 2 + 16
+
+    sender.on('message', function (buf) {
+      if (buf.length >= 1 && buf[0] === 1) { // done ACK
+        senderStopped = true
+        resolveStopped()
+        return
+      }
+      if (buf.length >= 3 && buf[0] === 0) {
+        const r = buf[1] | (buf[2] << 8)
+        if (r > latestRank) latestRank = r
+      }
+    })
+
+    const sendBatch = function (n) {
+      for (let i = 0; i < n && nextEsi < cap; i++) {
+        const b = encodeSymbol(enc.message(nextEsi++))
+        sender.send(b, link.port, link.host, function () {})
+        wire.fwdBytes += b.length
+        wire.symbolsSent++
+      }
+    }
+
+    // round 0: the k systematic symbols (all are needed on any link)
+    sendBatch(k)
+
+    // subsequent rounds, one per RTT: top up exactly the remaining deficit.
+    // Spacing by RTT means the previous batch is reflected in latestRank
+    // before we decide again, so we never re-request in-flight symbols and
+    // total sent converges to ~k/(1-loss).
+    const roundTick = function () {
+      if (senderStopped || wire.decoded || nextEsi >= cap) return
+      const deficit = k - latestRank
+      if (deficit > 0) sendBatch(deficit)
+      track(setTimeout(roundTick, rttMs))
+    }
+    track(setTimeout(roundTick, rttMs))
 
     const result = await completion
 
-    const bytesToCompletion = result.bytesAtDecode + ackBytes
+    // honor real flow control: wait (bounded) for the link-delivered ACK to
+    // actually stop the sender before teardown.
+    await Promise.race([
+      stoppedPromise,
+      new Promise(function (r) { track(setTimeout(r, rttMs * 6)) })
+    ])
+
+    for (const t of timers) clearTimeout(t)
+
+    const bytesToCompletion = result.bytesAtDecode + doneMsg.length
     const payloadBytes = k * blockSize
     return {
       side: 'coded',
@@ -152,10 +234,12 @@ async function codedTransfer ({ k, blockSize, loss, latencyMs = 0, jitterMs = 0,
       bytesPerBlockOverhead: (bytesToCompletion - payloadBytes) / k,
       wireEfficiency: payloadBytes / bytesToCompletion,
       droppedDatagrams: link.stats.dropped,
+      stoppedByAck: senderStopped,
       verified: result.verified
     }
   } finally {
-    wire.done = true
+    wire.decoded = true
+    senderStopped = true
     await closeSocket(receiver)
     if (sender) await closeSocket(sender)
     if (link) await link.close()

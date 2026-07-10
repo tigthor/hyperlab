@@ -1,17 +1,24 @@
-// frost-multiwriter — FROST threshold multi-writer for fixed writer sets
-// (e.g. a 3-of-5 org core): t-of-n writers cooperatively produce ONE standard
-// Ed25519 signature over the hypercore root, so replication sees a single
-// canonical signed core — no per-writer cores, no DAG, no reorg. (FROST-1)
+// frost-multiwriter — real t-of-n threshold Schnorr multi-writer for fixed
+// writer sets (e.g. a 2-of-3 org core). Any t of n writers cooperatively
+// produce ONE canonical group signature over the hypercore root, so a group
+// commit is a single signed object — no per-writer cores, no DAG, no reorg.
 //
-// What is real today: config validation and group signature verification
-// (a FROST output IS a standard Ed25519 signature, so verification is plain
-// crypto_sign_verify_detached — that is the whole point). What throws:
-// keygen, the two signing rounds, aggregation and the hypercore signer hook.
+// CRYPTO: this is FROST (RFC 9591) over the ristretto255 prime-order group,
+// via @noble/curves ristretto255_FROST. The output is a 64-byte ristretto255
+// Schnorr signature verifiable against the single 32-byte group public key.
+//
+// HONEST GAP: a ristretto255 Schnorr signature is NOT byte-compatible with
+// Ed25519 / RFC 8032. It does NOT drop into hypercore's stock ed25519
+// verifier. Making a hypercore-compatible group core needs FROST-Ed25519
+// (RFC 9591 Ed25519 ciphersuite) so the aggregate is a valid RFC 8032
+// signature — that is the follow-up, and createCore() stays an honest stub.
 
-const sodium = require('sodium-universal')
 const b4a = require('b4a')
+const { ristretto255_FROST: FROST } = require('@noble/curves/ed25519.js')
 
 const MIN_THRESHOLD = 2
+const SIGNATURE_BYTES = 64
+const PUBLICKEY_BYTES = 32
 
 /**
  * Validate a t-of-n configuration.
@@ -26,17 +33,58 @@ function validateConfig (threshold, signers) {
   if (signers < threshold) throw new Error('signers must be >= threshold')
 }
 
+function asBytes (message) {
+  if (b4a.isBuffer(message)) return message
+  if (message instanceof Uint8Array) return message
+  return b4a.from(message)
+}
+
+// Rebuild the canonical RFC 9591 commitment list from the public commit()
+// messages broadcast by the participating signers. Sorted by identifier so
+// every signer and the aggregator derive identical binding factors regardless
+// of the order messages arrived in — one canonical signature, no reorg.
+function toCommitmentList (commitments) {
+  return commitments
+    .map((c) => ({
+      identifier: c.identifier,
+      hiding: asBytes(c.hidingCommitment),
+      binding: asBytes(c.bindingCommitment)
+    }))
+    .sort((a, b) => (a.identifier < b.identifier ? -1 : a.identifier > b.identifier ? 1 : 0))
+}
+
 /**
- * Trusted-dealer FROST keygen: Shamir-share a group Ed25519 secret over the
- * ed25519 scalar field. (A DKG variant can replace the dealer later.)
+ * Trusted-dealer FROST keygen: verifiably secret-share one group secret over
+ * the ristretto255 scalar field into n shares, of which any t reconstruct a
+ * signing quorum. (RFC 9591 Appendix C; swap for the DKG rounds to drop the
+ * dealer.)
  *
  * @param {number} threshold - t
  * @param {number} signers - n
- * @returns {{ publicKey: Buffer, shares: { id: number, secretShare: Buffer, verificationShare: Buffer }[] }}
+ * @returns {{ publicKey: Buffer, group: object, shares: { id: number, identifier: string, secret: object, verificationShare: Buffer }[] }}
  */
 function dealerKeygen (threshold, signers) {
   validateConfig(threshold, signers)
-  throw new Error('not implemented: FROST trusted-dealer keygen (Shamir sharing over the ed25519 scalar field — sodium-universal lacks scalar multiplication, needs a scalar-arithmetic helper)')
+
+  const dealt = FROST.trustedDealer({ min: threshold, max: signers })
+  const group = dealt.public
+  const publicKey = b4a.from(group.commitments[0]) // group public key = first VSS commitment
+
+  const shares = []
+  for (let id = 1; id <= signers; id++) {
+    const identifier = FROST.Identifier.fromNumber(id)
+    const secret = dealt.secretShares[identifier]
+    // fail closed if the dealer produced an inconsistent share
+    FROST.validateSecret(secret, group)
+    shares.push({
+      id,
+      identifier,
+      secret,
+      verificationShare: b4a.from(group.verifyingShares[identifier])
+    })
+  }
+
+  return { publicKey, group, shares }
 }
 
 /**
@@ -44,86 +92,118 @@ function dealerKeygen (threshold, signers) {
  */
 class SignSession {
   /**
-   * @param {{ id: number, secretShare: Buffer, publicKey: Buffer, threshold: number, signers: number }} opts
+   * @param {{ id: number, secret: object, group: object, threshold: number, signers: number }} opts
+   *   - `secret` and `group` come straight from dealerKeygen() (a share + the group package).
    */
   constructor (opts = {}) {
-    const { id, secretShare = null, publicKey = null, threshold, signers } = opts
+    const { id, secret = null, group = null, threshold, signers } = opts
     validateConfig(threshold, signers)
     if (!Number.isInteger(id) || id < 1 || id > signers) {
       throw new Error('id must be an integer in [1, signers]')
     }
     this.id = id
-    this.secretShare = secretShare
-    this.publicKey = publicKey
+    this.identifier = FROST.Identifier.fromNumber(id)
+    this.secret = secret
+    this.group = group
     this.threshold = threshold
     this.signers = signers
     this.nonces = null
   }
 
   /**
-   * Round 1: generate a nonce pair (d, e), return the public commitments to
-   * broadcast to the other signers.
-   * @returns {{ id: number, hidingCommitment: Buffer, bindingCommitment: Buffer }}
+   * Round 1: generate a one-time nonce pair (d, e) and return the public
+   * commitments to broadcast to the other signers.
+   * @returns {{ id: number, identifier: string, hidingCommitment: Buffer, bindingCommitment: Buffer }}
    */
   commit () {
-    throw new Error('not implemented: FROST round 1 (nonce pair generation + commitments)')
+    if (!this.secret) throw new Error('session has no secret share to commit with')
+    const gen = FROST.commit(this.secret)
+    this.nonces = gen.nonces // one-time-use; consumed (zeroed) by sign()
+    return {
+      id: this.id,
+      identifier: this.identifier,
+      hidingCommitment: b4a.from(gen.commitments.hiding),
+      bindingCommitment: b4a.from(gen.commitments.binding)
+    }
   }
 
   /**
-   * Round 2: given the message and every participant's round-1 commitments,
-   * produce this participant's signature share.
-   * @param {Buffer} message - the hypercore root/tree hash to sign
-   * @param {{ id: number, hidingCommitment: Buffer, bindingCommitment: Buffer }[]} commitments
-   * @returns {{ id: number, share: Buffer }}
+   * Round 2: given the message and every participating signer's round-1
+   * commitments (including this signer's own), produce this signer's
+   * signature share. Throws if fewer than `threshold` commitments are present
+   * (the protocol fails closed below quorum).
+   * @param {Buffer} message - the root/tree hash being signed
+   * @param {{ id, identifier, hidingCommitment, bindingCommitment }[]} commitments
+   * @returns {{ id: number, identifier: string, share: Buffer }}
    */
   sign (message, commitments) {
-    throw new Error('not implemented: FROST round 2 (binding factors + per-signer response share)')
+    if (!this.nonces) throw new Error('must commit() before sign()')
+    if (!Array.isArray(commitments) || commitments.length < this.threshold) {
+      throw new Error('need at least threshold commitments to sign (below quorum)')
+    }
+    const list = toCommitmentList(commitments)
+    const share = FROST.signShare(this.secret, this.group, this.nonces, list, asBytes(message))
+    this.nonces = null // consumed
+    return { id: this.id, identifier: this.identifier, share: b4a.from(share) }
   }
 }
 
 /**
- * Aggregate >= threshold signature shares into one standard 64-byte Ed25519
- * signature verifiable with the group public key.
+ * Aggregate >= threshold signature shares into ONE 64-byte ristretto255
+ * Schnorr signature verifiable against the single group public key. Each share
+ * is verified individually; a bad/forged share makes aggregation fail closed
+ * (throwing, identifying the offending signer).
  * @param {Buffer} message
- * @param {{ id, hidingCommitment, bindingCommitment }[]} commitments
- * @param {{ id, share }[]} shares
- * @param {Buffer} publicKey - 32-byte group public key
- * @returns {Buffer} 64-byte Ed25519 signature
+ * @param {{ id, identifier, hidingCommitment, bindingCommitment }[]} commitments
+ * @param {{ id, identifier, share }[]} shares
+ * @param {object} group - the group package from dealerKeygen()
+ * @returns {Buffer} 64-byte signature
  */
-function aggregate (message, commitments, shares, publicKey) {
-  throw new Error('not implemented: FROST share aggregation (Lagrange interpolation of response shares)')
+function aggregate (message, commitments, shares, group) {
+  if (!group || !group.commitments) throw new Error('group package required (from dealerKeygen)')
+  const list = toCommitmentList(commitments)
+  const sigShares = {}
+  for (const s of shares) sigShares[s.identifier] = asBytes(s.share)
+  const sig = FROST.aggregate(group, list, asBytes(message), sigShares)
+  return b4a.from(sig)
 }
 
 /**
- * Verify a group signature. REAL: a FROST signature is a standard Ed25519
- * signature, so any stock hypercore replica verifies it with no code changes.
+ * Verify a group signature against the single 32-byte group public key.
+ * This is a plain ristretto255 Schnorr verify — NOT an Ed25519 verify.
  * @param {Buffer} signature - 64 bytes
  * @param {Buffer} message
  * @param {Buffer} publicKey - 32-byte group public key
  * @returns {boolean}
  */
 function verify (signature, message, publicKey) {
-  if (!b4a.isBuffer(signature) || signature.byteLength !== sodium.crypto_sign_BYTES) {
+  if (!b4a.isBuffer(signature) || signature.byteLength !== SIGNATURE_BYTES) {
     throw new Error('signature must be a 64-byte buffer')
   }
-  if (!b4a.isBuffer(publicKey) || publicKey.byteLength !== sodium.crypto_sign_PUBLICKEYBYTES) {
+  if (!b4a.isBuffer(publicKey) || publicKey.byteLength !== PUBLICKEY_BYTES) {
     throw new Error('publicKey must be a 32-byte buffer')
   }
-  if (!b4a.isBuffer(message)) message = b4a.from(message)
-  return sodium.crypto_sign_verify_detached(signature, message, publicKey)
+  try {
+    // A tampered signature can carry a non-canonical R point that fails to
+    // decode; that is an invalid signature, not a crash — return false.
+    return FROST.verify(signature, asBytes(message), publicKey)
+  } catch {
+    return false
+  }
 }
 
 /**
- * Create a hypercore whose appends are signed by the FROST group: plugs a
- * threshold signer into hypercore's manifest/signer abstraction, gathering
- * round-1/round-2 messages from `opts.transport` before each root signature.
+ * Create a hypercore whose appends are signed by the FROST group.
  *
- * @param {*} storage - hypercore storage (directory or hypercore-storage)
- * @param {{ publicKey: Buffer, session: SignSession, transport: object }} opts
- * @returns {import('hypercore')}
+ * HONEST STUB: not implemented. hypercore verifies RFC 8032 Ed25519, and the
+ * signatures this module produces are ristretto255 Schnorr, which are NOT
+ * byte-compatible. A hypercore-compatible group core needs the FROST-Ed25519
+ * ciphersuite (RFC 9591) so the aggregate is a valid Ed25519 signature the
+ * stock verifier accepts, plus a manifest signer hook that gathers the two
+ * signing rounds. That is the required follow-up.
  */
 function createCore (storage, opts = {}) {
-  throw new Error('not implemented: hypercore manifest signer backed by the FROST group key (needs async signing hook + signer round-trip transport)')
+  throw new Error('not implemented: FROST-Ed25519 needed for hypercore-compatible (RFC 8032) signatures')
 }
 
 module.exports = {
@@ -135,7 +215,7 @@ module.exports = {
   validateConfig,
   constants: {
     MIN_THRESHOLD,
-    SIGNATURE_BYTES: sodium.crypto_sign_BYTES,
-    PUBLICKEY_BYTES: sodium.crypto_sign_PUBLICKEYBYTES
+    SIGNATURE_BYTES,
+    PUBLICKEY_BYTES
   }
 }
