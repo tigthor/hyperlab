@@ -1,0 +1,26 @@
+{
+  "name": "hyperlab-harness",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local testnet, two-peer rigs, lossy-link injector and benchmarks for the hyperlab fork program. Nothing lands without this.",
+  "main": "testnet.js",
+  "scripts": {
+    "test": "brittle test/*.test.js",
+    "bench": "node bench/run.js",
+    "baseline": "node bench/run.js --baseline",
+    "check": "node bench/run.js --check"
+  },
+  "dependencies": {
+    "b4a": "^1.6.4",
+    "hypercore": "workspace:*",
+    "hyperdht": "workspace:*",
+    "hyperswarm": "workspace:*",
+    "hyperdrive": "workspace:*",
+    "corestore": "^7.0.0"
+  },
+  "devDependencies": {
+    "bare-fs": "^4.0.0",
+    "bare-os": "^3.0.0",
+    "brittle": "^3.0.0"
+  }
+}

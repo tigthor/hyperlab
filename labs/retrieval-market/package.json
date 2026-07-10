@@ -1,0 +1,18 @@
+{
+  "name": "retrieval-market",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Signed bandwidth/storage micro-receipts, aggregated and settled on an EVM L2 — prototype off-chain first. Fixes the uncompensated-relay free-rider problem. (INC-1, research HC-E7/DHT-E5/SW-E6)",
+  "main": "index.js",
+  "scripts": {
+    "test": "brittle test/*.test.js"
+  },
+  "dependencies": {
+    "b4a": "^1.6.4",
+    "compact-encoding": "^3.0.0",
+    "sodium-universal": "^5.0.1"
+  },
+  "devDependencies": {
+    "brittle": "^3.0.0"
+  }
+}

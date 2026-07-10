@@ -1,0 +1,18 @@
+{
+  "name": "pq-secretstream",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Hybrid X25519 + ML-KEM-768 handshake layer wrapping @hyperswarm/secret-stream, with downgrade protection. (CRYPTO-1, research SW-E3/DHT-E2)",
+  "main": "index.js",
+  "scripts": {
+    "test": "brittle test/*.test.js"
+  },
+  "dependencies": {
+    "@hyperswarm/secret-stream": "^6.0.0",
+    "b4a": "^1.6.4",
+    "sodium-universal": "^5.0.1"
+  },
+  "devDependencies": {
+    "brittle": "^3.0.0"
+  }
+}

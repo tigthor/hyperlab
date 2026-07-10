@@ -1,0 +1,66 @@
+{
+  "recorded": "2026-07-10T01:42:07.291Z",
+  "node": "v23.7.0",
+  "quick": true,
+  "reps": 5,
+  "benches": {
+    "append": {
+      "name": "append",
+      "blockSize": 1024,
+      "totalBlocks": 500,
+      "batchSize": 64,
+      "singleAppendsPerSec": 10157.010315703445,
+      "batchedAppendsPerSec": 124154.19951579864,
+      "singleMBPerSec": 9.918955386429145,
+      "batchedMBPerSec": 121.24433546464711
+    },
+    "handshake": {
+      "name": "handshake",
+      "handshakes": 3,
+      "latencyMsMedian": 2.278875,
+      "latencyMsP95": 3.06525,
+      "latencyMsMin": 2.262291,
+      "setupBytesToClientMedian": 677,
+      "setupBytesToServerMedian": 550,
+      "setupBytesTotalMedian": 1216,
+      "bytesNote": "UDP payload rx deltas over each DHT node UDX sockets (dht-rpc io sockets + hyperdht socket pool) from connect() to stream open; udx bytesTransmitted reads 0 for DHT request traffic on udx-native 1.20.7 so tx counters are not used; toClient = server->client bytes, toServer = client->server bytes reaching the server (DHT lookup queries to other nodes excluded); excludes IP/UDP headers; idle testnet rx noise measured at 0",
+      "firstMessageBytes": 116,
+      "firstMessageNote": "byteLength of the first inbound Noise (IK) handshake message observed at the server via createHandshake; it travels inside a DHT request, so the on-wire datagram is larger"
+    },
+    "replicate": {
+      "name": "replicate",
+      "transport": "hyperdht-testnet-socket",
+      "wireMethod": "secret-stream rawBytesWritten+rawBytesRead deltas on peer B DHT socket",
+      "blockSize": 1024,
+      "totalBlocks": 100,
+      "seed": 5352222,
+      "blocksRequested": 10,
+      "blocksVerified": 10,
+      "wallMs": 4.609625,
+      "totalBytesWired": 13446,
+      "payloadBytes": 10240,
+      "bytesPerBlockOverhead": 320.6,
+      "wireEfficiency": 0.7615647776290346
+    },
+    "replicate-lossy": {
+      "name": "replicate",
+      "transport": "udx-lossy-link",
+      "wireMethod": "udx socket bytesTransmitted sum over both peers (includes retransmissions)",
+      "blockSize": 1024,
+      "totalBlocks": 100,
+      "seed": 5352222,
+      "blocksRequested": 10,
+      "blocksVerified": 10,
+      "wallMs": 12.591208,
+      "totalBytesWired": 15028,
+      "payloadBytes": 10240,
+      "bytesPerBlockOverhead": 478.8,
+      "wireEfficiency": 0.6813947298376364,
+      "loss": 0.05,
+      "latencyMs": 0,
+      "jitterMs": 0,
+      "retransmits": 1,
+      "droppedDatagrams": 3
+    }
+  }
+}

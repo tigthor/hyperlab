@@ -1,0 +1,10 @@
+node_modules/
+*.log
+.DS_Store
+# local planning docs, deliberately unpublished
+holepunch-fork-plan.md
+compass_artifact_*.md
+harness/bench/results/
+harness/hyperlab-smoke-*/
+labs/**/build/
+labs/**/prebuilds/

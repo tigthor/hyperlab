@@ -1,0 +1,20 @@
+{
+  "name": "hyperbeam-pake",
+  "version": "0.0.1",
+  "private": true,
+  "description": "CPace PAKE rendezvous for hyperbeam — a low-entropy human passphrase that resists offline dictionary and first-come-first-served MITM attacks. The showcase win. (BEAM-1, research BEAM-E1)",
+  "main": "index.js",
+  "scripts": {
+    "test": "brittle test/*.test.js"
+  },
+  "dependencies": {
+    "b4a": "^1.6.4",
+    "hyperbeam": "workspace:*",
+    "hyperdht": "workspace:*",
+    "sodium-universal": "^5.0.1"
+  },
+  "devDependencies": {
+    "brittle": "^3.0.0",
+    "hyperlab-harness": "workspace:*"
+  }
+}

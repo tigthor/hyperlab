@@ -1,0 +1,7 @@
+packages:
+  - 'packages/*'
+  # bare is a C runtime, not a JS dependency of anything here — keep it out of
+  # the JS workspace so pnpm never tries to install/build its toolchain.
+  - '!packages/bare'
+  - 'labs/*'
+  - 'harness'

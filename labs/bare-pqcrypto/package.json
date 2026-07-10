@@ -1,0 +1,16 @@
+{
+  "name": "bare-pqcrypto",
+  "version": "0.0.1",
+  "private": true,
+  "description": "ML-KEM / ML-DSA (FIPS 203/204) for Bare and Node — WASM/liboqs first for iteration speed, constant-time native addon later. (BARE-1, research BARE-E7)",
+  "main": "index.js",
+  "scripts": {
+    "test": "brittle test/*.test.js"
+  },
+  "dependencies": {
+    "b4a": "^1.6.4"
+  },
+  "devDependencies": {
+    "brittle": "^3.0.0"
+  }
+}

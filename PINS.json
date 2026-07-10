@@ -1,0 +1,13 @@
+{
+  "recorded": "2026-07-10T01:42:54Z",
+  "pins": {
+    "bare": { "commit": "b4a039c8fd5419afd2466854a91e89395b43523f", "version": "unversioned", "describe": "v1.28.4-42-gb4a039c" },
+    "dht-rpc": { "commit": "a079674d7185ece6fe310974ef8cabc5bc59d4e2", "version": "6.27.0", "describe": "v6.27.0" },
+    "hyperbeam": { "commit": "cbdf8b5a304f0cbd27c25abec843eb4ccfe0b6f4", "version": "3.1.0", "describe": "v3.1.0" },
+    "hyperblobs": { "commit": "4645f874f189a61323718814ce8221f3438652da", "version": "2.12.1", "describe": "v2.12.0-2-g4645f87" },
+    "hypercore": { "commit": "ddd6c79eb5d545401a380cbca04c708b966ebbdf", "version": "11.33.5", "describe": "v11.30.0-22-gddd6c79" },
+    "hyperdht": { "commit": "ac6eaa5def633ccdd0b1c733f14b63036dbe4d33", "version": "6.33.0", "describe": "v6.32.0-10-gac6eaa5" },
+    "hyperdrive": { "commit": "0f6a69a75a0b812b0445386a76bbfb95cc9e9b4d", "version": "13.3.3", "describe": "v13.3.2-4-g0f6a69a" },
+    "hyperswarm": { "commit": "48d4241f69f848bb4c9dccb65b6fce5a9f40009d", "version": "4.17.0", "describe": "v4.17.0-6-g48d4241" }
+  }
+}

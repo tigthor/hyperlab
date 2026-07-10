@@ -1,0 +1,19 @@
+{
+  "name": "hypercore-raptorq",
+  "version": "0.0.1",
+  "private": true,
+  "description": "RaptorQ (RFC 6330) fountain-coded replication as a hypercore extension message — repair symbols alongside block/hash. Must beat want/have bytes-to-completion on a >=5% loss link or it stays a research note. (HC-R1, research HC-E3)",
+  "main": "index.js",
+  "scripts": {
+    "test": "brittle test/*.test.js"
+  },
+  "dependencies": {
+    "b4a": "^1.6.4",
+    "compact-encoding": "^3.0.0",
+    "hypercore": "workspace:*"
+  },
+  "devDependencies": {
+    "brittle": "^3.0.0",
+    "hyperlab-harness": "workspace:*"
+  }
+}

@@ -1,0 +1,24 @@
+[submodule "packages/hypercore"]
+	path = packages/hypercore
+	url = https://github.com/tigthor/hypercore
+[submodule "packages/hyperdht"]
+	path = packages/hyperdht
+	url = https://github.com/tigthor/hyperdht
+[submodule "packages/dht-rpc"]
+	path = packages/dht-rpc
+	url = https://github.com/tigthor/dht-rpc
+[submodule "packages/hyperswarm"]
+	path = packages/hyperswarm
+	url = https://github.com/tigthor/hyperswarm
+[submodule "packages/hyperdrive"]
+	path = packages/hyperdrive
+	url = https://github.com/tigthor/hyperdrive
+[submodule "packages/hyperblobs"]
+	path = packages/hyperblobs
+	url = https://github.com/tigthor/hyperblobs
+[submodule "packages/hyperbeam"]
+	path = packages/hyperbeam
+	url = https://github.com/tigthor/hyperbeam
+[submodule "packages/bare"]
+	path = packages/bare
+	url = https://github.com/tigthor/bare
