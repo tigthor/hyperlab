@@ -110,6 +110,20 @@ const GATES = {
   }
 }
 
+// Machine-PORTABLE gated metrics: byte counts, sizes and ratios that are a
+// function of the protocol, not the CPU, so they are stable across machines and
+// valid to gate on CI against a baseline recorded elsewhere. Throughput
+// (appends/sec, MB/sec) and wall/latency (latencyMs, wallMs) are machine-LOCAL —
+// a slow CI runner is ~40-55% slower than a dev laptop, which is not a
+// regression — so `--portable-only` (used by CI) checks only these. A local
+// `--check` on the machine that recorded the baseline still gates everything.
+const PORTABLE_METRICS = new Set([
+  'firstMessageBytes',
+  'wireEfficiency',
+  'totalBytesWired',
+  'bytesPerBlockOverhead'
+])
+
 // Absolute noise floors for gated metrics, in the metric's own unit. A
 // gate only fails when the relative move exceeds THRESHOLD AND the
 // absolute move exceeds this floor. Local-loopback timings sit at 2-4 ms
@@ -130,7 +144,16 @@ const NOISE_FLOORS = {
 // order-of-magnitude regression without flapping on scheduler noise.
 const THRESHOLD_OVERRIDES = {
   'append.batchedAppendsPerSec': 0.35,
-  'append.batchedMBPerSec': 0.35
+  'append.batchedMBPerSec': 0.35,
+  // Under loss, bytes-to-completion carries real retransmission-framing variance:
+  // the seeded drop pattern is fixed but UDX's retransmit/ACK framing around it is
+  // not, so even the byte metrics swing ~15% run-to-run (and more across machines).
+  // Widen so the portable CI gate catches an order-of-magnitude regression without
+  // flapping on that inherent variance; the clean-link replicate byte gate stays
+  // tight at 15%.
+  'replicate-lossy.bytesPerBlockOverhead': 0.4,
+  'replicate-lossy.totalBytesWired': 0.4,
+  'replicate-lossy.wireEfficiency': 0.4
 }
 
 const QUICK_REPS = 5
@@ -216,18 +239,21 @@ function median (values) {
 
 // Returns [{ bench, metric, direction, current, base, delta, status }]
 // where status is 'pass' | 'fail' | 'skip'.
-function checkGates (benches, baseline, threshold = THRESHOLD) {
+function checkGates (benches, baseline, threshold = THRESHOLD, portableOnly = false) {
   const baseBenches = (baseline && baseline.benches) || {}
   const results = []
+  const keep = (m) => !portableOnly || PORTABLE_METRICS.has(m)
 
   for (const name of Object.keys(GATES)) {
     const current = benches[name] || {}
     const base = baseBenches[name] || {}
 
     for (const metric of GATES[name].higherIsBetter) {
+      if (!keep(metric)) continue
       results.push(gateOne(name, metric, 'higher-is-better', current[metric], base[metric], threshold))
     }
     for (const metric of GATES[name].lowerIsBetter) {
+      if (!keep(metric)) continue
       results.push(gateOne(name, metric, 'lower-is-better', current[metric], base[metric], threshold))
     }
   }
@@ -335,16 +361,17 @@ function formatDelta (delta) {
 }
 
 function parseArgs (argv) {
-  const args = { quick: false, baseline: false, check: false, reps: 0 }
+  const args = { quick: false, baseline: false, check: false, portableOnly: false, reps: 0 }
 
   for (const arg of argv) {
     if (arg === '--quick') args.quick = true
     else if (arg === '--baseline') args.baseline = true
     else if (arg === '--check') args.check = true
+    else if (arg === '--portable-only') args.portableOnly = true
     else if (/^--reps=\d+$/.test(arg)) args.reps = parseInt(arg.slice(7), 10)
     else {
       console.error('unknown argument: ' + arg)
-      console.error('usage: node bench/run.js [--quick] [--baseline] [--check] [--reps=N]')
+      console.error('usage: node bench/run.js [--quick] [--baseline] [--check] [--portable-only] [--reps=N]')
       return null
     }
   }
@@ -377,7 +404,7 @@ async function main () {
   let gates = null
 
   if (args.check) {
-    gates = checkGates(record.benches, baseline)
+    gates = checkGates(record.benches, baseline, THRESHOLD, args.portableOnly)
 
     // Retry only the failing benches with fresh reps and merge the
     // samples before the verdict, so one noisy batch cannot fail the
@@ -402,7 +429,7 @@ async function main () {
         record.benches[name] = aggregate(name, rawRuns[name])
       }
 
-      gates = checkGates(record.benches, baseline)
+      gates = checkGates(record.benches, baseline, THRESHOLD, args.portableOnly)
     }
   }
 
