@@ -1,0 +1,30 @@
+- generic [ref=f3e2]:
+  - banner [ref=f3e3]:
+    - link "filedrop" [ref=f3e5] [cursor=pointer]:
+      - /url: /
+    - navigation [ref=f3e6]:
+      - link "protocol" [ref=f3e7] [cursor=pointer]:
+        - /url: /#protocol
+      - link "trust" [ref=f3e8] [cursor=pointer]:
+        - /url: /#trust
+  - main [ref=f3e9]:
+    - text: everything below happens in this page — the gateway relays ciphertext
+    - generic [ref=f3e10]:
+      - generic [ref=f3e11]:
+        - heading "send" [level=2] [ref=f3e12]
+        - button "drop a file here or click to choose" [ref=f3e13] [cursor=pointer]: drop a file here — or click to choose. it never leaves this page unencrypted.
+        - generic "chunks sent"
+        - status [ref=f3e14]
+      - generic [ref=f3e15]:
+        - heading "receive" [level=2] [ref=f3e16]
+        - generic [ref=f3e17]:
+          - textbox "passphrase" [active] [ref=f3e18]:
+            - /placeholder: quartz-amber-koala-yarrow
+            - text: cedar-falcon-nimbus-topaz
+          - button "receive" [ref=f3e20] [cursor=pointer]
+        - generic "chunks verified" [ref=f3e24]
+        - status [ref=f3e21]: verified — cli-to-browser.bin (2.5 MiB) · receipt signed
+        - link "save cli-to-browser.bin" [ref=f3e66] [cursor=pointer]:
+          - /url: blob:http://localhost:8787/577b9172-57a6-43ca-9163-49e2a1582db1
+  - contentinfo [ref=f3e22]:
+    - generic [ref=f3e23]: wrong passphrase? nothing moves — that is the point.

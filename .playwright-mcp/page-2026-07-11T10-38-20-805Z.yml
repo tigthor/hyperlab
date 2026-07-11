@@ -1,0 +1,57 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]: filedrop
+    - navigation [ref=e5]:
+      - link "protocol" [ref=e6] [cursor=pointer]:
+        - /url: "#protocol"
+      - link "trust" [ref=e7] [cursor=pointer]:
+        - /url: "#trust"
+      - link "open the app" [ref=e8] [cursor=pointer]:
+        - /url: /app
+  - main [ref=e9]:
+    - generic [ref=e10]:
+      - text: serverless · encrypted · peer-to-peer
+      - heading "drop a file. say four words." [level=1] [ref=e11]: drop a file.say four words.
+      - paragraph [ref=e12]:
+        - text: filedrop moves a file from your machine to theirs —
+        - emphasis [ref=e13]: directly
+        - text: ". The passphrase below is the whole ceremony: whoever can say it, receives the file. No account, no upload, no server holding your bytes."
+      - generic "a live example passphrase" [ref=e14]:
+        - generic [ref=e15]:
+          - generic [ref=e16]: a passphrase, freshly rolled
+          - button "↻ reroll" [ref=e17] [cursor=pointer]
+        - generic [ref=e18]: co
+      - generic [ref=e20]:
+        - link "drop a file" [ref=e21] [cursor=pointer]:
+          - /url: /app
+        - link "receive one" [ref=e22] [cursor=pointer]:
+          - /url: /app#receive
+    - generic [ref=e23]:
+      - heading "what actually happens" [level=2] [ref=e24]
+      - figure "protocol transcript" [ref=e25]:
+        - generic [ref=e26]: 1 PAKE both sides prove the passphrase with CPace — never sending it
+        - generic [ref=e27]: 2 CONFIRM wrong guess? the connection dies here. zero file bytes moved
+        - generic [ref=e28]: 3 MANIFEST name, size, and a BLAKE2b leaf per chunk, sealed with the session key
+        - generic [ref=e29]: 4 CHUNK 64 KiB at a time — each verified against its leaf ✓ before it is written
+        - generic [ref=e30]: 5 RECEIPT the receiver signs for the exact bytes and hash — proof-of-delivery, not vibes
+    - generic [ref=e31]:
+      - heading "why you can trust it" [level=2] [ref=e32]
+      - generic [ref=e33]:
+        - generic [ref=e34]:
+          - heading "wrong passphrase, nothing moves" [level=3] [ref=e35]
+          - paragraph [ref=e36]:
+            - text: The passphrase seeds a
+            - code [ref=e37]: CPace
+            - text: exchange. A guesser — or a man-in-the-middle — fails key confirmation before the manifest exists.
+        - generic [ref=e38]:
+          - heading "every chunk proves itself" [level=3] [ref=e39]
+          - paragraph [ref=e40]: The manifest commits to each chunk's hash. A flipped bit anywhere is caught on arrival, and the whole file re-verifies before it is saved.
+        - generic [ref=e41]:
+          - heading "the relay sees ciphertext" [level=3] [ref=e42]
+          - paragraph [ref=e43]: In the browser, a gateway relays DHT packets — but every frame is sealed with a key derived from the passphrase, which the gateway never learns. Its compromise is a denial of service, not a leak.
+  - contentinfo [ref=e44]:
+    - generic [ref=e45]: filedrop — part of the hyperlab sovereign stack
+    - generic [ref=e46]:
+      - text: "also a CLI:"
+      - link "filedrop send <file>" [ref=e47] [cursor=pointer]:
+        - /url: "#protocol"

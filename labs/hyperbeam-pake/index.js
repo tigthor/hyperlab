@@ -19,6 +19,7 @@
 const sodium = require('sodium-universal')
 const b4a = require('b4a')
 const { ristretto255, ristretto255_hasher } = require('@noble/curves/ed25519.js')
+const { argon2id } = require('@noble/hashes/argon2.js')
 
 const Point = ristretto255.Point
 
@@ -89,15 +90,13 @@ function topicFromPassphrase (passphrase) {
   // can never coincide with any other use of the raw passphrase bytes.
   const pwInput = b4a.alloc(32)
   sodium.crypto_generichash_batch(pwInput, [NS_TOPIC, passphrase])
-  const topic = b4a.alloc(32)
-  sodium.crypto_pwhash(
-    topic,
-    pwInput,
-    TOPIC_SALT,
-    sodium.crypto_pwhash_OPSLIMIT_INTERACTIVE,
-    sodium.crypto_pwhash_MEMLIMIT_INTERACTIVE,
-    sodium.crypto_pwhash_ALG_ARGON2ID13
-  )
+  // Argon2id via @noble/hashes rather than sodium.crypto_pwhash: pure JS, so
+  // the browser derives the exact same topic (sodium-javascript, the browser
+  // sodium shim, has no crypto_pwhash). Parameters mirror libsodium
+  // INTERACTIVE / ARGON2ID13 — t = OPSLIMIT_INTERACTIVE (2),
+  // m = MEMLIMIT_INTERACTIVE in KiB (65536 = 64 MiB), p = 1 — and the output
+  // is verified byte-identical to crypto_pwhash in test/basic.test.js.
+  const topic = b4a.from(argon2id(pwInput, TOPIC_SALT, { t: 2, m: 65536, p: 1, dkLen: 32 }))
   sodium.sodium_memzero(pwInput)
   return topic
 }

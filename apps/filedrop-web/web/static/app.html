@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>filedrop — send or receive</title>
+<link rel="stylesheet" href="/drop.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%2316120d'/><rect x='3' y='3' width='10' height='10' fill='%23f0a63c'/></svg>">
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <span class="wordmark"><a href="/" style="color:inherit"><b>filedrop</b></a></span>
+  <nav>
+    <a href="/#protocol">protocol</a>
+    <a href="/#trust">trust</a>
+  </nav>
+</header>
+
+<main class="app-main">
+  <span class="eyebrow">everything below happens in this page — the gateway relays ciphertext</span>
+
+  <div class="panes">
+    <div class="pane" id="send-pane">
+      <h2>send</h2>
+      <div class="dropzone" id="drop" role="button" tabindex="0"
+           aria-label="drop a file here or click to choose">
+        drop a file here — or click to choose.<br>
+        it never leaves this page unencrypted.
+      </div>
+      <input type="file" id="file-input" hidden>
+      <div class="meta" id="send-meta"></div>
+
+      <div class="pass-wrap" id="pass-wrap" hidden>
+        <span class="eyebrow">tell the receiver</span>
+        <div class="pass" id="passphrase"></div>
+        <div class="row">
+          <button class="btn small" id="copy-pass" type="button">copy</button>
+          <button class="btn small" id="copy-link" type="button">copy link</button>
+        </div>
+      </div>
+
+      <div class="grid" id="send-grid" hidden aria-label="chunks sent"></div>
+      <div class="status" id="send-status" role="status"></div>
+      <p class="hint" id="send-hint" hidden>keep this page open while they receive — the file
+      streams from here, peer to peer.</p>
+    </div>
+
+    <div class="pane" id="receive">
+      <h2>receive</h2>
+      <form id="recv-form">
+        <input type="text" id="pass-input" placeholder="quartz-amber-koala-yarrow"
+               autocomplete="off" autocapitalize="none" spellcheck="false"
+               aria-label="passphrase">
+        <div style="height:12px"></div>
+        <button class="btn primary" id="recv-btn" type="submit">receive</button>
+      </form>
+      <div class="grid" id="recv-grid" hidden aria-label="chunks verified"></div>
+      <div class="status" id="recv-status" role="status"></div>
+      <div id="save-wrap" hidden>
+        <a class="btn primary" id="save-link" href="#">save file</a>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <span>wrong passphrase? nothing moves — that is the point.</span>
+</footer>
+
+</div>
+<script src="/app.bundle.js"></script>
+</body>
+</html>

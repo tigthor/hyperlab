@@ -1,0 +1,15 @@
+diff --git a/lib/server-proxy.js b/lib/server-proxy.js
+--- a/lib/server-proxy.js
++++ b/lib/server-proxy.js
+@@ -89,7 +89,10 @@
+   this._node._connecting.set(alias, stream)
+ 
+   const onError = (err) => {
+-    this._protocol.destroy.send({ alias, error: err.message })
++    // paired:true selects the alias branch of the destroy codec; without it the
++    // codec encodes an undefined remoteAlias and crashes the relay process
++    // whenever a relayed stream errors at teardown
++    this._protocol.destroy.send({ paired: true, alias, error: err.message })
+   }
+ 
+   const onClose = () => {

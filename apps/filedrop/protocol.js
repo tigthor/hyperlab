@@ -157,13 +157,15 @@ async function runCPace (sock, reader, passphrase, sid, isInitiator) {
 
 class SecretChannel {
   constructor (sock, reader, key, isInitiator) {
-    const sodium = require('sodium-universal')
-    this._sodium = sodium
+    // @noble/ciphers rather than sodium: pure JS, so the exact same AEAD runs
+    // under Node, Bare and the browser (sodium-javascript, the browser shim
+    // for sodium-universal, does not implement xchacha20poly1305)
+    this._aead = require('@noble/ciphers/chacha.js').xchacha20poly1305
     this.sock = sock
     this.reader = reader
-    this.key = key
-    this.txNonce = b4a.alloc(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES)
-    this.rxNonce = b4a.alloc(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES)
+    this.key = b4a.from(key)
+    this.txNonce = b4a.alloc(24)
+    this.rxNonce = b4a.alloc(24)
     this.txNonce[0] = isInitiator ? 1 : 2
     this.rxNonce[0] = isInitiator ? 2 : 1
   }
@@ -175,25 +177,20 @@ class SecretChannel {
   }
 
   send (type, payload) {
-    const sodium = this._sodium
     if (!payload) payload = b4a.alloc(0)
     const pt = b4a.concat([b4a.from([type]), payload])
-    const ct = b4a.alloc(pt.byteLength + sodium.crypto_aead_xchacha20poly1305_ietf_ABYTES)
-    sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(ct, pt, null, null, this.txNonce, this.key)
+    const ct = this._aead(this.key, this.txNonce).encrypt(pt)
     this._bump(this.txNonce)
-    return writeMsg(this.sock, TYPE.ENC, ct)
+    return writeMsg(this.sock, TYPE.ENC, b4a.from(ct))
   }
 
   async recv () {
-    const sodium = this._sodium
     const msg = await this.reader.expect(TYPE.ENC)
     const ct = msg.payload
-    if (ct.byteLength < sodium.crypto_aead_xchacha20poly1305_ietf_ABYTES + 1) {
-      throw new Error('secret channel: frame too short')
-    }
-    const pt = b4a.alloc(ct.byteLength - sodium.crypto_aead_xchacha20poly1305_ietf_ABYTES)
+    if (ct.byteLength < 17) throw new Error('secret channel: frame too short')
+    let pt
     try {
-      sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(pt, null, ct, null, this.rxNonce, this.key)
+      pt = this._aead(this.key, this.rxNonce).decrypt(ct)
     } catch {
       throw new Error('secret channel: frame failed to authenticate')
     }

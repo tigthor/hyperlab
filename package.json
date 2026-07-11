@@ -18,6 +18,9 @@
       "hyperdrive": "workspace:*",
       "hyperblobs": "workspace:*",
       "hyperbeam": "workspace:*"
+    },
+    "patchedDependencies": {
+      "@hyperswarm/dht-relay@0.4.3": "patches/@hyperswarm__dht-relay@0.4.3.patch"
     }
   }
 }

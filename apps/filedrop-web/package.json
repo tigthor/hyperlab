@@ -4,7 +4,9 @@
   "private": true,
   "description": "filedrop for the browser: a websocket gateway that relays the real DHT via @hyperswarm/dht-relay, plus the drag-drop web app and landing page. The gateway relays packets; keys, CPace auth and chunk verification stay client-side.",
   "main": "gateway.js",
-  "bin": { "filedrop-web": "./gateway.js" },
+  "bin": {
+    "filedrop-web": "./gateway.js"
+  },
   "scripts": {
     "build": "node build.js",
     "start": "node gateway.js",
@@ -22,6 +24,7 @@
     "esbuild": "^0.24.0",
     "hyperlab-harness": "workspace:*",
     "hyperswarm": "workspace:*",
-    "p2p-sync": "workspace:*"
+    "p2p-sync": "workspace:*",
+    "sodium-javascript": "^0.8.0"
   }
 }

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>filedrop — drop a file, say four words</title>
+<meta name="description" content="Serverless encrypted file transfer over a peer-to-peer DHT. Drop a file, get a four-word passphrase; the receiver types it anywhere.">
+<link rel="stylesheet" href="/drop.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%2316120d'/><rect x='3' y='3' width='10' height='10' fill='%23f0a63c'/></svg>">
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <span class="wordmark"><b>filedrop</b></span>
+  <nav>
+    <a href="#protocol">protocol</a>
+    <a href="#trust">trust</a>
+    <a class="cta" href="/app">open the app</a>
+  </nav>
+</header>
+
+<main>
+  <div class="hero">
+    <span class="eyebrow">serverless &middot; encrypted &middot; peer-to-peer</span>
+    <h1>drop a file.<br>say <span class="dim">four words.</span></h1>
+    <p class="lede">filedrop moves a file from your machine to theirs — <em>directly</em>.
+    The passphrase below is the whole ceremony: whoever can say it, receives the
+    file. No account, no upload, no server holding your bytes.</p>
+
+    <div class="specimen" aria-label="a live example passphrase">
+      <div class="label">
+        <span class="eyebrow">a passphrase, freshly rolled</span>
+        <button id="reroll" type="button">↻ reroll</button>
+      </div>
+      <div class="pass"><span id="specimen-pass"></span><span class="cursor" aria-hidden="true"></span></div>
+    </div>
+
+    <div class="hero-ctas">
+      <a class="btn primary" href="/app">drop a file</a>
+      <a class="btn" href="/app#receive">receive one</a>
+    </div>
+  </div>
+
+  <section id="protocol">
+    <h2>what actually happens</h2>
+    <div class="transcript" role="figure" aria-label="protocol transcript">
+      <div><span class="a">1 PAKE</span>      both sides prove the passphrase with <b>CPace</b> — never sending it</div>
+      <div><span class="a">2 CONFIRM</span>   wrong guess? the connection dies here. <b>zero file bytes moved</b></div>
+      <div><span class="a">3 MANIFEST</span>  name, size, and a <b>BLAKE2b leaf per chunk</b>, sealed with the session key</div>
+      <div><span class="a">4 CHUNK</span>     64 KiB at a time — each verified against its leaf <span class="ok">✓</span> before it is written</div>
+      <div><span class="a">5 RECEIPT</span>   the receiver <b>signs</b> for the exact bytes and hash — proof-of-delivery, not vibes</div>
+    </div>
+  </section>
+
+  <section id="trust">
+    <h2>why you can trust it</h2>
+    <div class="facts">
+      <div class="fact">
+        <h3>wrong passphrase, nothing moves</h3>
+        <p>The passphrase seeds a <code>CPace</code> exchange. A guesser — or a
+        man-in-the-middle — fails key confirmation before the manifest exists.</p>
+      </div>
+      <div class="fact">
+        <h3>every chunk proves itself</h3>
+        <p>The manifest commits to each chunk's hash. A flipped bit anywhere is
+        caught on arrival, and the whole file re-verifies before it is saved.</p>
+      </div>
+      <div class="fact">
+        <h3>the relay sees ciphertext</h3>
+        <p>In the browser, a gateway relays DHT packets — but every frame is
+        sealed with a key derived from the passphrase, which the gateway never
+        learns. Its compromise is a denial of service, not a leak.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span>filedrop — part of the hyperlab sovereign stack</span>
+  <span>also a CLI: <a href="#protocol">filedrop send &lt;file&gt;</a></span>
+</footer>
+
+</div>
+<script>
+// live passphrase specimen — same wordlist the real sender draws from
+const WORDS = ['amber','brave','cedar','delta','ember','flint','grove','harbor',
+  'ivory','jade','koala','lunar','maple','nimbus','onyx','pixel',
+  'quartz','raven','sable','topaz','umber','violet','willow','xenon',
+  'yarrow','zephyr','copper','basalt','cobalt','dahlia','falcon','garnet']
+
+function roll () {
+  const pick = () => WORDS[crypto.getRandomValues(new Uint32Array(1))[0] % WORDS.length]
+  return [pick(), pick(), pick(), pick()].join('-')
+}
+
+const el = document.getElementById('specimen-pass')
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches
+
+function type (text) {
+  if (reduce) { el.textContent = text; return }
+  el.textContent = ''
+  let i = 0
+  const t = setInterval(() => {
+    el.textContent = text.slice(0, ++i)
+    if (i >= text.length) clearInterval(t)
+  }, 34)
+}
+
+type(roll())
+document.getElementById('reroll').addEventListener('click', () => type(roll()))
+</script>
+</body>
+</html>

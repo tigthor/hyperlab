@@ -205,3 +205,20 @@ test('wire integration throws honestly', function (t) {
   t.exception(() => createPakeBeam('bright-otter-42'), /not implemented/)
   t.exception(() => createPakeBeam(''), /non-empty/)
 })
+
+test('topic argon2id is byte-identical to libsodium crypto_pwhash', function (t) {
+  // the browser derives the topic with @noble/hashes argon2id; Node used to
+  // use sodium's crypto_pwhash — both must land on the same topic forever
+  const sodium = require('sodium-universal')
+  const b4a = require('b4a')
+  const { argon2id } = require('@noble/hashes/argon2.js')
+  const salt = b4a.from('hyperbeamPAKEv1!', 'utf8')
+  const input = b4a.alloc(32, 42)
+  const viaSodium = b4a.alloc(32)
+  sodium.crypto_pwhash(viaSodium, input, salt,
+    sodium.crypto_pwhash_OPSLIMIT_INTERACTIVE,
+    sodium.crypto_pwhash_MEMLIMIT_INTERACTIVE,
+    sodium.crypto_pwhash_ALG_ARGON2ID13)
+  const viaNoble = b4a.from(argon2id(input, salt, { t: 2, m: 65536, p: 1, dkLen: 32 }))
+  t.ok(b4a.equals(viaSodium, viaNoble), 'argon2id parameter mapping matches crypto_pwhash exactly')
+})
