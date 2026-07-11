@@ -21,7 +21,7 @@
   },
   "devDependencies": {
     "brittle": "^3.0.0",
-    "esbuild": "^0.24.0",
+    "esbuild": "^0.28.1",
     "hyperlab-harness": "workspace:*",
     "hyperswarm": "workspace:*",
     "p2p-sync": "workspace:*",
