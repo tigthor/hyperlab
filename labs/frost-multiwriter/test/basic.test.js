@@ -135,10 +135,12 @@ test('verify input validation', function (t) {
   t.exception(() => frost.verify(signature, message, b4a.alloc(3)), /32-byte/)
 })
 
-test('SignSession id bounds and createCore is an honest stub', function (t) {
+test('SignSession id bounds and createCore input validation', async function (t) {
   const dealt = frost.dealerKeygen(3, 5)
   t.exception(() => new frost.SignSession({ id: 0, group: dealt.group, threshold: 3, signers: 5 }), /id must be/)
   t.exception(() => new frost.SignSession({ id: 6, group: dealt.group, threshold: 3, signers: 5 }), /id must be/)
 
-  t.exception(() => frost.createCore(null, {}), /not implemented: FROST-Ed25519/)
+  // createCore is real now (FROST-Ed25519, see test/ed25519.test.js) — it
+  // requires the 32-byte group key up front
+  await t.exception(frost.createCore(null, null), /groupPublicKey/)
 })

@@ -90,13 +90,27 @@ function topicFromPassphrase (passphrase) {
   // can never coincide with any other use of the raw passphrase bytes.
   const pwInput = b4a.alloc(32)
   sodium.crypto_generichash_batch(pwInput, [NS_TOPIC, passphrase])
-  // Argon2id via @noble/hashes rather than sodium.crypto_pwhash: pure JS, so
-  // the browser derives the exact same topic (sodium-javascript, the browser
-  // sodium shim, has no crypto_pwhash). Parameters mirror libsodium
-  // INTERACTIVE / ARGON2ID13 — t = OPSLIMIT_INTERACTIVE (2),
-  // m = MEMLIMIT_INTERACTIVE in KiB (65536 = 64 MiB), p = 1 — and the output
-  // is verified byte-identical to crypto_pwhash in test/basic.test.js.
-  const topic = b4a.from(argon2id(pwInput, TOPIC_SALT, { t: 2, m: 65536, p: 1, dkLen: 32 }))
+  // Native sodium crypto_pwhash when available (Node/Bare — pure-JS Argon2id
+  // at 64 MiB costs hundreds of ms per call, which resume-heavy flows pay per
+  // reconnect); @noble/hashes argon2id where sodium lacks it (the browser's
+  // sodium-javascript shim). Parameters mirror libsodium INTERACTIVE /
+  // ARGON2ID13 — t = OPSLIMIT_INTERACTIVE (2), m = MEMLIMIT_INTERACTIVE in
+  // KiB (65536 = 64 MiB), p = 1 — and the two implementations are verified
+  // byte-identical in test/basic.test.js, so both derive the same topic.
+  let topic
+  if (typeof sodium.crypto_pwhash === 'function') {
+    topic = b4a.alloc(32)
+    sodium.crypto_pwhash(
+      topic,
+      pwInput,
+      TOPIC_SALT,
+      sodium.crypto_pwhash_OPSLIMIT_INTERACTIVE,
+      sodium.crypto_pwhash_MEMLIMIT_INTERACTIVE,
+      sodium.crypto_pwhash_ALG_ARGON2ID13
+    )
+  } else {
+    topic = b4a.from(argon2id(pwInput, TOPIC_SALT, { t: 2, m: 65536, p: 1, dkLen: 32 }))
+  }
   sodium.sodium_memzero(pwInput)
   return topic
 }

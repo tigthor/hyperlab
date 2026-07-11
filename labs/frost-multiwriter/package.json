@@ -11,9 +11,11 @@
     "@noble/curves": "^2.2.0",
     "b4a": "^1.6.4",
     "hypercore": "workspace:*",
+    "hypercore-crypto": "^3.4.0",
     "sodium-universal": "^5.0.1"
   },
   "devDependencies": {
-    "brittle": "^3.0.0"
+    "brittle": "^3.0.0",
+    "hypercore-storage": "^3.0.0"
   }
 }
