@@ -1,0 +1,138 @@
+{
+  "summary": {
+    "kind": "drop",
+    "mode": "direct",
+    "n": 3,
+    "ok": 3,
+    "failed": 0,
+    "when": "2026-07-11T02:02:09.195Z",
+    "paths": {
+      "unknown": 3
+    },
+    "connectMs": {
+      "n": 3,
+      "min": 1219,
+      "med": 1394,
+      "max": 2307
+    },
+    "throughputBps": {
+      "n": 3,
+      "min": 8756376,
+      "med": 9000652,
+      "max": 9279434
+    },
+    "bootstrapMs": {
+      "n": 6,
+      "min": 5454,
+      "med": 6002,
+      "max": 6343
+    }
+  },
+  "trials": [
+    {
+      "i": 0,
+      "size": 4194304,
+      "mode": "direct",
+      "send": {
+        "role": "send",
+        "ok": true,
+        "file": "/var/folders/k0/6fznhrh54qscpbj1rnkc1n000000gn/T/realnet-drop-JzHV7p/payload-0.bin",
+        "bootstrapMs": 6343,
+        "passphrase": "quartz-amber-koala-yarrow",
+        "listenMs": 1386,
+        "bytes": 4194304,
+        "connectWaitMs": 8242,
+        "transferMs": 457,
+        "throughputBps": 9177908,
+        "receiptVerified": true,
+        "path": "unknown",
+        "remoteHost": "172.20.10.3",
+        "remotePort": 49738
+      },
+      "recv": {
+        "role": "recv",
+        "ok": true,
+        "bootstrapMs": 5805,
+        "bytes": 4194304,
+        "path_file": "/var/folders/k0/6fznhrh54qscpbj1rnkc1n000000gn/T/realnet-drop-JzHV7p/payload-0.bin",
+        "connectMs": 2307,
+        "transferMs": 466,
+        "throughputBps": 9000652,
+        "path": "unknown",
+        "remoteHost": "172.20.10.3",
+        "remotePort": 49737
+      },
+      "ok": true
+    },
+    {
+      "i": 1,
+      "size": 4194304,
+      "mode": "direct",
+      "send": {
+        "role": "send",
+        "ok": true,
+        "file": "/var/folders/k0/6fznhrh54qscpbj1rnkc1n000000gn/T/realnet-drop-u83qFr/payload-1.bin",
+        "bootstrapMs": 5454,
+        "passphrase": "raven-yarrow-amber-basalt",
+        "listenMs": 1936,
+        "bytes": 4194304,
+        "connectWaitMs": 7529,
+        "transferMs": 440,
+        "throughputBps": 9532509,
+        "receiptVerified": true,
+        "path": "unknown",
+        "remoteHost": "172.20.10.3",
+        "remotePort": 49738
+      },
+      "recv": {
+        "role": "recv",
+        "ok": true,
+        "bootstrapMs": 6002,
+        "bytes": 4194304,
+        "path_file": "/var/folders/k0/6fznhrh54qscpbj1rnkc1n000000gn/T/realnet-drop-u83qFr/payload-1.bin",
+        "connectMs": 1394,
+        "transferMs": 452,
+        "throughputBps": 9279434,
+        "path": "unknown",
+        "remoteHost": "172.20.10.3",
+        "remotePort": 49737
+      },
+      "ok": true
+    },
+    {
+      "i": 2,
+      "size": 4194304,
+      "mode": "direct",
+      "send": {
+        "role": "send",
+        "ok": true,
+        "file": "/var/folders/k0/6fznhrh54qscpbj1rnkc1n000000gn/T/realnet-drop-eO8u7o/payload-2.bin",
+        "bootstrapMs": 6047,
+        "passphrase": "delta-brave-grove-jade",
+        "listenMs": 1676,
+        "bytes": 4194304,
+        "connectWaitMs": 6808,
+        "transferMs": 466,
+        "throughputBps": 9000652,
+        "receiptVerified": true,
+        "path": "unknown",
+        "remoteHost": "172.20.10.3",
+        "remotePort": 49738
+      },
+      "recv": {
+        "role": "recv",
+        "ok": true,
+        "bootstrapMs": 5465,
+        "bytes": 4194304,
+        "path_file": "/var/folders/k0/6fznhrh54qscpbj1rnkc1n000000gn/T/realnet-drop-eO8u7o/payload-2.bin",
+        "connectMs": 1219,
+        "transferMs": 479,
+        "throughputBps": 8756376,
+        "path": "unknown",
+        "remoteHost": "172.20.10.3",
+        "remotePort": 49737
+      },
+      "ok": true
+    }
+  ]
+}

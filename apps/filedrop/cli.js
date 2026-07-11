@@ -3,7 +3,12 @@
 //
 //   filedrop send <file>              print a passphrase, wait for a receiver
 //   filedrop receive <pass> [dir]     connect and pull the file into dir (cwd)
+//
+// Both commands accept --relay <64-hex blind-relay key> (or FILEDROP_RELAY in
+// the env) for the symmetric-NAT case: the connection races direct holepunch
+// vs relay and uses the relay only if punching fails.
 
+const b4a = require('b4a')
 const DHT = require('hyperdht')
 const { createSender, receive } = require('.')
 
@@ -20,7 +25,7 @@ function progressBar (frac) {
   return '[' + '#'.repeat(filled) + '-'.repeat(w - filled) + ']'
 }
 
-async function cmdSend (file) {
+async function cmdSend (file, relayThrough) {
   if (!file) fail('usage: filedrop send <file>')
   const node = new DHT()
   let sender
@@ -29,6 +34,12 @@ async function cmdSend (file) {
   try {
     sender = createSender(file, {
       node,
+      relayThrough,
+      onConnection (sock) {
+        sock.once('open', () => {
+          process.stderr.write('  peer connected (' + sock.rawStream.remoteHost + ':' + sock.rawStream.remotePort + ')\n')
+        })
+      },
       onProgress ({ chunk, totalChunks }) {
         const now = Date.now()
         if (now - lastLine < 80 && chunk !== totalChunks) return
@@ -57,7 +68,7 @@ async function cmdSend (file) {
   }
 }
 
-async function cmdReceive (passphrase, dir) {
+async function cmdReceive (passphrase, dir, relayThrough) {
   if (!passphrase) fail('usage: filedrop receive <passphrase> [dir]')
   const outdir = dir || process.cwd()
   const node = new DHT()
@@ -67,6 +78,12 @@ async function cmdReceive (passphrase, dir) {
     let lastLine = 0
     const result = await receive(passphrase, outdir, {
       node,
+      relayThrough,
+      onConnection (sock) {
+        sock.once('open', () => {
+          process.stderr.write('  connected (' + sock.rawStream.remoteHost + ':' + sock.rawStream.remotePort + ')\n')
+        })
+      },
       onProgress ({ chunk, totalChunks, bytes }) {
         const now = Date.now()
         if (now - lastLine < 80 && chunk !== totalChunks) return
@@ -90,11 +107,23 @@ function fail (msg) {
   process.exit(1)
 }
 
+function parseRelay (argv) {
+  let relay = process.env.FILEDROP_RELAY || null
+  const rest = []
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--relay') relay = argv[++i]
+    else rest.push(argv[i])
+  }
+  if (relay && !/^[0-9a-f]{64}$/i.test(relay)) fail('--relay must be a 64-char hex public key')
+  return { relayThrough: relay ? b4a.from(relay, 'hex') : null, rest }
+}
+
 async function main () {
-  const [cmd, a, b] = process.argv.slice(2)
-  if (cmd === 'send') await cmdSend(a)
-  else if (cmd === 'receive') await cmdReceive(a, b)
-  else fail('usage: filedrop <send <file> | receive <pass> [dir]>')
+  const { relayThrough, rest } = parseRelay(process.argv.slice(2))
+  const [cmd, a, b] = rest
+  if (cmd === 'send') await cmdSend(a, relayThrough)
+  else if (cmd === 'receive') await cmdReceive(a, b, relayThrough)
+  else fail('usage: filedrop <send <file> | receive <pass> [dir]> [--relay <key>]')
 }
 
 main().then(() => process.exit(0)).catch(err => fail(err.message))

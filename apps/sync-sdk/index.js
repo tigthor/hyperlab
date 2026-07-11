@@ -29,6 +29,9 @@ class SyncDB extends EventEmitter {
     this.swarm = opts.swarm || null // may be injected by tests
     this._ownsSwarm = false
     this._joinSwarm = opts.join !== false // set false to replicate only over injected connections
+    // blind-relay key(s) for the symmetric-NAT case: hyperswarm falls back to
+    // TURN-style relaying when holepunching fails or the local NAT randomizes
+    this.relayThrough = opts.relayThrough || null
     this.discovery = null
 
     const key = opts.key || null // remote autobase key to bootstrap from (invite peer)
@@ -72,7 +75,7 @@ class SyncDB extends EventEmitter {
 
     if (this._joinSwarm) {
       if (!this.swarm) {
-        this.swarm = new Hyperswarm({ bootstrap: this.bootstrap })
+        this.swarm = new Hyperswarm({ bootstrap: this.bootstrap, relayThrough: this.relayThrough })
         this._ownsSwarm = true
       }
       this.swarm.on('connection', (conn) => {

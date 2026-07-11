@@ -1,0 +1,82 @@
+{
+  "summary": {
+    "kind": "sync",
+    "mode": "direct",
+    "n": 2,
+    "ok": 2,
+    "failed": 0,
+    "when": "2026-07-11T02:09:25.938Z",
+    "connectMs": {
+      "n": 2,
+      "min": 6322,
+      "med": 6895,
+      "max": 6895
+    },
+    "convergeMs": {
+      "n": 2,
+      "min": 6461,
+      "med": 7018,
+      "max": 7018
+    },
+    "roundTripMs": {
+      "n": 2,
+      "min": 12424,
+      "med": 12624,
+      "max": 12624
+    }
+  },
+  "trials": [
+    {
+      "i": 0,
+      "keys": 50,
+      "serve": {
+        "role": "serve",
+        "ok": true,
+        "seeded": 50,
+        "ackAfterMs": 12624,
+        "connections": 1,
+        "remotes": [
+          "172.20.10.3:49738"
+        ]
+      },
+      "join": {
+        "role": "join",
+        "ok": true,
+        "connectMs": 6895,
+        "convergeMs": 7018,
+        "keys": 50,
+        "writableMs": 7018,
+        "remotes": [
+          "172.20.10.3:49737"
+        ]
+      },
+      "ok": true
+    },
+    {
+      "i": 1,
+      "keys": 50,
+      "serve": {
+        "role": "serve",
+        "ok": true,
+        "seeded": 50,
+        "ackAfterMs": 12424,
+        "connections": 1,
+        "remotes": [
+          "172.20.10.3:49738"
+        ]
+      },
+      "join": {
+        "role": "join",
+        "ok": true,
+        "connectMs": 6322,
+        "convergeMs": 6461,
+        "keys": 50,
+        "writableMs": 6461,
+        "remotes": [
+          "172.20.10.3:49737"
+        ]
+      },
+      "ok": true
+    }
+  ]
+}

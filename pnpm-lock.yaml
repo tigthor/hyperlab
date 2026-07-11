@@ -84,9 +84,18 @@ importers:
       b4a:
         specifier: ^1.6.4
         version: 1.8.1
+      blind-relay:
+        specifier: ^1.6.1
+        version: 1.6.1(bare-buffer@3.6.2)(bare-url@2.4.5)
+      bogon:
+        specifier: ^1.0.0
+        version: 1.3.0
       corestore:
         specifier: ^7.0.0
         version: 7.11.0(bare-buffer@3.6.2)(bare-url@2.4.5)
+      filedrop:
+        specifier: workspace:*
+        version: link:../apps/filedrop
       hypercore:
         specifier: workspace:*
         version: link:../packages/hypercore
@@ -99,6 +108,9 @@ importers:
       hyperswarm:
         specifier: workspace:*
         version: link:../packages/hyperswarm
+      p2p-sync:
+        specifier: workspace:*
+        version: link:../apps/sync-sdk
     devDependencies:
       bare-fs:
         specifier: ^4.0.0
@@ -567,7 +579,7 @@ importers:
         version: 1.0.2
       mirror-drive:
         specifier: ^1.2.0
-        version: 1.14.2
+        version: 1.14.2(bare-url@2.4.5)
       ready-resource:
         specifier: ^1.0.0
         version: 1.2.0
@@ -604,13 +616,13 @@ importers:
         version: 3.19.1(bare-buffer@3.6.2)(bare-events@2.9.1)(bare-pipe@4.2.2(bare-buffer@3.6.2))(bare-tcp@2.5.2(bare-buffer@3.6.2)(bare-pipe@4.2.2(bare-buffer@3.6.2)))
       corestore:
         specifier: ^7.0.0
-        version: 7.11.0(bare-buffer@3.6.2)
+        version: 7.11.0(bare-buffer@3.6.2)(bare-url@2.4.5)
       debugging-stream:
         specifier: ^3.1.0
         version: 3.1.0
       hypercore-crypto:
         specifier: ^3.4.0
-        version: 3.7.0(bare-buffer@3.6.2)(bare-events@2.9.1)
+        version: 3.7.0(bare-buffer@3.6.2)(bare-events@2.9.1)(bare-url@2.4.5)
       hyperdht:
         specifier: workspace:*
         version: link:../hyperdht
@@ -3062,6 +3074,23 @@ snapshots:
       - react-native-b4a
       - sodium-javascript
 
+  blind-relay@1.6.1(bare-buffer@3.6.2)(bare-url@2.4.5):
+    dependencies:
+      b4a: 1.8.1
+      bare-events: 2.9.1
+      bits-to-bytes: 1.3.0
+      compact-encoding: 3.3.0
+      compact-encoding-bitfield: 1.1.0
+      protomux: 3.11.0
+      sodium-universal: 5.0.1(bare-buffer@3.6.2)(bare-events@2.9.1)(bare-url@2.4.5)
+      streamx: 2.28.0
+    transitivePeerDependencies:
+      - bare-abort-controller
+      - bare-buffer
+      - bare-url
+      - react-native-b4a
+      - sodium-javascript
+
   bogon@1.3.0:
     dependencies:
       compact-encoding: 3.3.0
@@ -4136,11 +4165,11 @@ snapshots:
 
   minimist@1.2.8: {}
 
-  mirror-drive@1.14.2:
+  mirror-drive@1.14.2(bare-url@2.4.5):
     dependencies:
       bare-events: 2.9.1
       binary-stream-equals: 1.0.0
-      rabin-stream: 2.0.0
+      rabin-stream: 2.0.0(bare-url@2.4.5)
       same-data: 1.0.0
       speedometer: 1.1.0
       streamx: 2.28.0
@@ -4407,15 +4436,15 @@ snapshots:
       - bare-url
       - react-native-b4a
 
-  rabin-native@2.0.0:
+  rabin-native@2.0.0(bare-url@2.4.5):
     dependencies:
       require-addon: 1.2.0(bare-url@2.4.5)
     transitivePeerDependencies:
       - bare-url
 
-  rabin-stream@2.0.0:
+  rabin-stream@2.0.0(bare-url@2.4.5):
     dependencies:
-      rabin-native: 2.0.0
+      rabin-native: 2.0.0(bare-url@2.4.5)
       streamx: 2.28.0
     transitivePeerDependencies:
       - bare-abort-controller

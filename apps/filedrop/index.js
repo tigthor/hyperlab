@@ -195,17 +195,22 @@ function computeManifest (name, buf, chunkSize) {
 // SENDER
 // ---------------------------------------------------------------------------
 
-// createSender(file, { node, passphrase?, chunkSize?, onProgress? })
+// createSender(file, { node, passphrase?, chunkSize?, onProgress?, relayThrough?, onConnection? })
 // Stands up a DHT server pinned to the passphrase-derived rendezvous keypair,
 // authenticates each incoming connection with CPace, streams the file, and
 // resolves `finished` with the verified signed receipt. Stays listening across
 // reconnects so a killed transfer can resume on a fresh connection.
+//
+// relayThrough (32-byte key or array of keys) names blind-relay node(s): the
+// connection races direct holepunch vs relay and upgrades to direct when the
+// punch succeeds, so symmetric-NAT peers still connect instead of failing.
 function createSender (file, opts = {}) {
   const node = opts.node
   if (!node) throw new Error('opts.node (a DHT node) is required')
   const chunkSize = opts.chunkSize || DEFAULT_CHUNK_SIZE
   const passphrase = opts.passphrase || randomPassphrase()
   const onProgress = opts.onProgress || (() => {})
+  const onConnection = opts.onConnection || (() => {})
 
   const buf = b4a.from(fs.readFileSync(file))
   const name = path.basename(file)
@@ -222,6 +227,11 @@ function createSender (file, opts = {}) {
   let settled = false
 
   const server = node.createServer({
+    relayThrough: opts.relayThrough || null,
+    // relay-only privacy mode: holepunch=false + shareLocalAddress=false means
+    // the peer only ever sees the relay's address, never ours
+    holepunch: opts.holepunch === false ? false : undefined,
+    shareLocalAddress: opts.shareLocalAddress === false ? false : undefined,
     firewall (remotePublicKey) {
       // Only accept the peer connecting with our own rendezvous keypair.
       return !b4a.equals(remotePublicKey, keyPair.publicKey)
@@ -229,6 +239,7 @@ function createSender (file, opts = {}) {
   }, onconnection)
 
   async function onconnection (sock) {
+    onConnection(sock)
     const reader = new MessageReader(sock)
     try {
       if ((await sock.opened) === false) throw new Error('sender socket failed to open')
@@ -289,7 +300,7 @@ function createSender (file, opts = {}) {
 // RECEIVER
 // ---------------------------------------------------------------------------
 
-// receive(passphrase, outdir, { node, onProgress? })
+// receive(passphrase, outdir, { node, onProgress?, relayThrough?, onConnection? })
 // Connects to the passphrase-derived rendezvous keypair, authenticates with
 // CPace (rejects on a wrong passphrase before any file byte is read), then
 // pulls chunks — each verified against the manifest leaf — into `<name>.part`,
@@ -309,7 +320,13 @@ async function receive (passphrase, outdir, opts = {}) {
   const keyPair = DHT.keyPair(topic)
   const sid = b4a.from(topic.subarray(0, 16))
 
-  const sock = node.connect(keyPair.publicKey, { keyPair })
+  const sock = node.connect(keyPair.publicKey, {
+    keyPair,
+    relayThrough: opts.relayThrough || null,
+    holepunch: opts.holepunch === false ? () => false : undefined,
+    localConnection: opts.localConnection === false ? false : undefined
+  })
+  if (opts.onConnection) opts.onConnection(sock)
   const reader = new MessageReader(sock)
   let fd = null
 

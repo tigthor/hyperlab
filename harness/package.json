@@ -12,11 +12,15 @@
   },
   "dependencies": {
     "b4a": "^1.6.4",
+    "blind-relay": "^1.6.1",
+    "bogon": "^1.0.0",
+    "corestore": "^7.0.0",
+    "filedrop": "workspace:*",
     "hypercore": "workspace:*",
     "hyperdht": "workspace:*",
-    "hyperswarm": "workspace:*",
     "hyperdrive": "workspace:*",
-    "corestore": "^7.0.0"
+    "hyperswarm": "workspace:*",
+    "p2p-sync": "workspace:*"
   },
   "devDependencies": {
     "bare-fs": "^4.0.0",

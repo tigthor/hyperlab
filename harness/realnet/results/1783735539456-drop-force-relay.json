@@ -1,0 +1,103 @@
+{
+  "summary": {
+    "kind": "drop",
+    "mode": "force-relay",
+    "n": 2,
+    "ok": 2,
+    "failed": 0,
+    "when": "2026-07-11T02:05:39.452Z",
+    "paths": {
+      "direct-lan": 2
+    },
+    "connectMs": {
+      "n": 2,
+      "min": 2564,
+      "med": 3350,
+      "max": 3350
+    },
+    "throughputBps": {
+      "n": 2,
+      "min": 1688528,
+      "med": 9446631,
+      "max": 9446631
+    },
+    "bootstrapMs": {
+      "n": 4,
+      "min": 4913,
+      "med": 6367,
+      "max": 6804
+    }
+  },
+  "trials": [
+    {
+      "i": 0,
+      "size": 2097152,
+      "mode": "force-relay",
+      "send": {
+        "role": "send",
+        "ok": true,
+        "file": "/var/folders/k0/6fznhrh54qscpbj1rnkc1n000000gn/T/realnet-drop-1vMvn1/payload-0.bin",
+        "bootstrapMs": 6804,
+        "passphrase": "pixel-raven-flint-koala",
+        "listenMs": 1919,
+        "bytes": 2097152,
+        "connectWaitMs": 8678,
+        "transferMs": 1243,
+        "throughputBps": 1687170,
+        "receiptVerified": true,
+        "path": "direct-lan",
+        "remoteHost": "172.20.10.3",
+        "remotePort": 49737
+      },
+      "recv": {
+        "role": "recv",
+        "ok": true,
+        "bootstrapMs": 5996,
+        "bytes": 2097152,
+        "path_file": "/var/folders/k0/6fznhrh54qscpbj1rnkc1n000000gn/T/realnet-drop-1vMvn1/payload-0.bin",
+        "connectMs": 2564,
+        "transferMs": 1242,
+        "throughputBps": 1688528,
+        "path": "direct-lan",
+        "remoteHost": "172.20.10.3",
+        "remotePort": 49737
+      },
+      "ok": true
+    },
+    {
+      "i": 1,
+      "size": 2097152,
+      "mode": "force-relay",
+      "send": {
+        "role": "send",
+        "ok": true,
+        "file": "/var/folders/k0/6fznhrh54qscpbj1rnkc1n000000gn/T/realnet-drop-mdwIsF/payload-1.bin",
+        "bootstrapMs": 6367,
+        "passphrase": "garnet-raven-lunar-dahlia",
+        "listenMs": 2636,
+        "bytes": 2097152,
+        "connectWaitMs": 8392,
+        "transferMs": 223,
+        "throughputBps": 9404269,
+        "receiptVerified": true,
+        "path": "direct-lan",
+        "remoteHost": "172.20.10.3",
+        "remotePort": 49737
+      },
+      "recv": {
+        "role": "recv",
+        "ok": true,
+        "bootstrapMs": 4913,
+        "bytes": 2097152,
+        "path_file": "/var/folders/k0/6fznhrh54qscpbj1rnkc1n000000gn/T/realnet-drop-mdwIsF/payload-1.bin",
+        "connectMs": 3350,
+        "transferMs": 222,
+        "throughputBps": 9446631,
+        "path": "direct-lan",
+        "remoteHost": "172.20.10.3",
+        "remotePort": 49737
+      },
+      "ok": true
+    }
+  ]
+}
