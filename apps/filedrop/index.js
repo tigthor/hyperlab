@@ -5,11 +5,19 @@
 // connection is authenticated with CPace (hyperbeam-pake) so a wrong
 // passphrase aborts before any file bytes move — the Noise keypair alone is
 // low-entropy (passphrase-derived) and would be MITM-able; CPace's key
-// confirmation is the real auth gate. The file is chunked, each chunk verified
-// against the manifest's per-chunk BLAKE2b leaf, the transfer is resumable
-// after a mid-stream kill (receiver persists a byte/chunk offset sidecar), and
-// on completion the receiver signs a retrieval-market receipt binding the byte
+// confirmation is the real auth gate. Every post-CPace frame is additionally
+// sealed with the CPace ISK (SecretChannel), so file bytes stay end-to-end
+// encrypted even when the transport is proxied (custodial dht-relay gateway
+// for browsers). The file is chunked, each chunk verified against the
+// manifest's per-chunk BLAKE2b leaf, the transfer is resumable after a
+// mid-stream kill (receiver persists a byte/chunk offset sidecar), and on
+// completion the receiver signs a retrieval-market receipt binding the byte
 // count and file hash, which the sender verifies as proof-of-receipt.
+//
+// The wire protocol (framing, CPace gate, SecretChannel, manifests,
+// passphrases) lives in protocol.js and is transport/storage-agnostic; this
+// file is the Node entry: fs storage, resume sidecars, hyperdht transport.
+// browser.js is the same protocol with in-memory storage over dht-relay.
 
 const fs = require('fs')
 const path = require('path')
@@ -17,179 +25,22 @@ const b4a = require('b4a')
 const DHT = require('hyperdht')
 const crypto = require('hypercore-crypto')
 const rm = require('retrieval-market')
-const { CPace, topicFromPassphrase } = require('hyperbeam-pake')
-
-const DEFAULT_CHUNK_SIZE = 64 * 1024
-
-const TYPE = {
-  PAKE: 1,
-  CONFIRM: 2,
-  MANIFEST: 3,
-  RESUME: 4,
-  CHUNK: 5,
-  DONE: 6,
-  RECEIPT: 7
-}
-
-// ---------------------------------------------------------------------------
-// framing: [u32be len][type byte][payload], len = 1 + payload.length
-// ---------------------------------------------------------------------------
-
-function u32be (n) {
-  const b = b4a.alloc(4)
-  b[0] = (n >>> 24) & 0xff
-  b[1] = (n >>> 16) & 0xff
-  b[2] = (n >>> 8) & 0xff
-  b[3] = n & 0xff
-  return b
-}
-
-function readU32 (buf, off) {
-  return (buf[off] * 0x1000000) + ((buf[off + 1] << 16) | (buf[off + 2] << 8) | buf[off + 3])
-}
-
-function writeMsg (sock, type, payload) {
-  if (!payload) payload = b4a.alloc(0)
-  const frame = b4a.concat([u32be(1 + payload.byteLength), b4a.from([type]), payload])
-  const ok = sock.write(frame)
-  if (ok) return Promise.resolve()
-  return new Promise((resolve, reject) => {
-    const onDrain = () => { cleanup(); resolve() }
-    const onClose = () => { cleanup(); reject(new Error('stream closed during write')) }
-    const cleanup = () => {
-      sock.removeListener('drain', onDrain)
-      sock.removeListener('close', onClose)
-    }
-    sock.once('drain', onDrain)
-    sock.once('close', onClose)
-  })
-}
-
-// A buffered, message-boundary-preserving reader over a NoiseSecretStream.
-// 'data' events do NOT respect our frame boundaries, so we accumulate and pull
-// complete frames off the front.
-class MessageReader {
-  constructor (sock) {
-    this.sock = sock
-    this.buffered = b4a.alloc(0)
-    this.queue = []
-    this.waiters = []
-    this.ended = false
-    this.error = null
-
-    this._onData = (d) => this._push(d)
-    this._onEnd = () => this._finish(null)
-    this._onError = (err) => this._finish(err)
-
-    sock.on('data', this._onData)
-    sock.on('end', this._onEnd)
-    sock.on('close', this._onEnd)
-    sock.on('error', this._onError)
-  }
-
-  _push (d) {
-    this.buffered = this.buffered.byteLength ? b4a.concat([this.buffered, d]) : d
-    while (this.buffered.byteLength >= 4) {
-      const len = readU32(this.buffered, 0)
-      if (this.buffered.byteLength < 4 + len) break
-      const type = this.buffered[4]
-      const payload = b4a.from(this.buffered.subarray(5, 4 + len))
-      this.buffered = b4a.from(this.buffered.subarray(4 + len))
-      const msg = { type, payload }
-      if (this.waiters.length) this.waiters.shift().resolve(msg)
-      else this.queue.push(msg)
-    }
-  }
-
-  _finish (err) {
-    if (this.ended) return
-    this.ended = true
-    this.error = err || new Error('stream ended')
-    while (this.waiters.length) this.waiters.shift().reject(this.error)
-  }
-
-  read () {
-    if (this.queue.length) return Promise.resolve(this.queue.shift())
-    if (this.ended) return Promise.reject(this.error)
-    return new Promise((resolve, reject) => this.waiters.push({ resolve, reject }))
-  }
-
-  async expect (type) {
-    const msg = await this.read()
-    if (msg.type !== type) throw new Error('protocol error: expected type ' + type + ' got ' + msg.type)
-    return msg
-  }
-
-  destroy () {
-    this.sock.removeListener('data', this._onData)
-    this.sock.removeListener('end', this._onEnd)
-    this.sock.removeListener('close', this._onEnd)
-    this.sock.removeListener('error', this._onError)
-  }
-}
-
-// ---------------------------------------------------------------------------
-// CPace over the connection — the authentication gate
-// ---------------------------------------------------------------------------
-
-// Runs the full CPace exchange (start/finish + key confirmation) over an open
-// socket. Resolves the 32-byte ISK on success; REJECTS if the peer's
-// confirmation tag does not verify (wrong passphrase / MITM) — the caller must
-// destroy the socket on rejection so no file bytes ever move.
-async function runCPace (sock, reader, passphrase, sid, isInitiator) {
-  const cp = new CPace(passphrase, { isInitiator, sid })
-  const myMsg = cp.start()
-  await writeMsg(sock, TYPE.PAKE, myMsg)
-  const peer = await reader.expect(TYPE.PAKE)
-  cp.finish(peer.payload)
-  const myTag = cp.confirm()
-  await writeMsg(sock, TYPE.CONFIRM, myTag)
-  const peerTag = await reader.expect(TYPE.CONFIRM)
-  if (!cp.verifyConfirm(peerTag.payload)) {
-    throw new Error('CPace key confirmation failed — wrong passphrase or MITM')
-  }
-  return cp.key
-}
-
-// ---------------------------------------------------------------------------
-// manifest encoding (JSON header; per-chunk leaves are small vs the payload)
-// ---------------------------------------------------------------------------
-
-function encodeManifest (m) {
-  return b4a.from(JSON.stringify({
-    name: m.name,
-    size: m.size,
-    chunkSize: m.chunkSize,
-    totalChunks: m.totalChunks,
-    merkleRoot: b4a.toString(m.merkleRoot, 'hex'),
-    provider: b4a.toString(m.provider, 'hex'),
-    leaves: m.leaves.map(l => b4a.toString(l, 'hex'))
-  }))
-}
-
-function decodeManifest (payload) {
-  const o = JSON.parse(b4a.toString(payload))
-  return {
-    name: o.name,
-    size: o.size,
-    chunkSize: o.chunkSize,
-    totalChunks: o.totalChunks,
-    merkleRoot: b4a.from(o.merkleRoot, 'hex'),
-    provider: b4a.from(o.provider, 'hex'),
-    leaves: o.leaves.map(h => b4a.from(h, 'hex'))
-  }
-}
-
-function computeManifest (name, buf, chunkSize) {
-  const totalChunks = Math.max(1, Math.ceil(buf.byteLength / chunkSize))
-  const leaves = []
-  for (let i = 0; i < totalChunks; i++) {
-    const chunk = buf.subarray(i * chunkSize, Math.min(buf.byteLength, (i + 1) * chunkSize))
-    leaves.push(crypto.data(chunk))
-  }
-  const merkleRoot = crypto.hash(b4a.concat(leaves))
-  return { name, size: buf.byteLength, chunkSize, totalChunks, merkleRoot, leaves }
-}
+const { topicFromPassphrase } = require('hyperbeam-pake')
+const {
+  DEFAULT_CHUNK_SIZE,
+  TYPE,
+  u32be,
+  readU32,
+  writeMsg,
+  MessageReader,
+  runCPace,
+  SecretChannel,
+  secureChannel,
+  encodeManifest,
+  decodeManifest,
+  computeManifest,
+  randomPassphrase
+} = require('./protocol')
 
 // ---------------------------------------------------------------------------
 // SENDER
@@ -197,9 +48,10 @@ function computeManifest (name, buf, chunkSize) {
 
 // createSender(file, { node, passphrase?, chunkSize?, onProgress?, relayThrough?, onConnection? })
 // Stands up a DHT server pinned to the passphrase-derived rendezvous keypair,
-// authenticates each incoming connection with CPace, streams the file, and
-// resolves `finished` with the verified signed receipt. Stays listening across
-// reconnects so a killed transfer can resume on a fresh connection.
+// authenticates each incoming connection with CPace, streams the file inside
+// the ISK-sealed channel, and resolves `finished` with the verified signed
+// receipt. Stays listening across reconnects so a killed transfer can resume
+// on a fresh connection.
 //
 // relayThrough (32-byte key or array of keys) names blind-relay node(s): the
 // connection races direct holepunch vs relay and upgrades to direct when the
@@ -243,20 +95,20 @@ function createSender (file, opts = {}) {
     const reader = new MessageReader(sock)
     try {
       if ((await sock.opened) === false) throw new Error('sender socket failed to open')
-      await runCPace(sock, reader, passphrase, sid, true)
+      const ch = await secureChannel(sock, reader, passphrase, sid, true)
 
-      await writeMsg(sock, TYPE.MANIFEST, encodeManifest(manifest))
-      const resume = await reader.expect(TYPE.RESUME)
+      await ch.send(TYPE.MANIFEST, encodeManifest(manifest))
+      const resume = await ch.expect(TYPE.RESUME)
       const fromChunk = JSON.parse(b4a.toString(resume.payload)).fromChunk | 0
 
       for (let i = fromChunk; i < manifest.totalChunks; i++) {
         const chunk = buf.subarray(i * chunkSize, Math.min(buf.byteLength, (i + 1) * chunkSize))
-        await writeMsg(sock, TYPE.CHUNK, b4a.concat([u32be(i), chunk]))
+        await ch.send(TYPE.CHUNK, b4a.concat([u32be(i), chunk]))
         onProgress({ side: 'send', chunk: i + 1, totalChunks: manifest.totalChunks })
       }
-      await writeMsg(sock, TYPE.DONE)
+      await ch.send(TYPE.DONE)
 
-      const receiptMsg = await reader.expect(TYPE.RECEIPT)
+      const receiptMsg = await ch.expect(TYPE.RECEIPT)
       const signed = rm.decodeReceipt(receiptMsg.payload)
       const ok = rm.verifyReceipt(signed) &&
         b4a.equals(signed.channel, manifest.merkleRoot) &&
@@ -332,9 +184,9 @@ async function receive (passphrase, outdir, opts = {}) {
 
   try {
     if ((await sock.opened) === false) throw new Error('receiver socket failed to open')
-    await runCPace(sock, reader, passphrase, sid, false)
+    const ch = await secureChannel(sock, reader, passphrase, sid, false)
 
-    const manifest = decodeManifest((await reader.expect(TYPE.MANIFEST)).payload)
+    const manifest = decodeManifest((await ch.expect(TYPE.MANIFEST)).payload)
     fs.mkdirSync(outdir, { recursive: true })
     const partPath = path.join(outdir, manifest.name + '.part')
     const sidecarPath = path.join(outdir, manifest.name + '.filedrop.json')
@@ -351,10 +203,10 @@ async function receive (passphrase, outdir, opts = {}) {
     const consumer = rm.keyPair(b4a.from(state.consumerSeed, 'hex'))
     fd = fs.openSync(partPath, 'r+')
 
-    await writeMsg(sock, TYPE.RESUME, b4a.from(JSON.stringify({ fromChunk: state.verified })))
+    await ch.send(TYPE.RESUME, b4a.from(JSON.stringify({ fromChunk: state.verified })))
 
     while (true) {
-      const msg = await reader.read()
+      const msg = await ch.recv()
       if (msg.type === TYPE.DONE) break
       if (msg.type !== TYPE.CHUNK) throw new Error('protocol error: expected CHUNK/DONE got ' + msg.type)
 
@@ -395,7 +247,7 @@ async function receive (passphrase, outdir, opts = {}) {
       sequence: 1
     })
     const signed = rm.signReceipt(receipt, consumer.secretKey)
-    await writeMsg(sock, TYPE.RECEIPT, rm.encodeReceipt(signed))
+    await ch.send(TYPE.RECEIPT, rm.encodeReceipt(signed))
 
     reader.destroy()
     sock.end()
@@ -431,28 +283,6 @@ function saveSidecar (sidecarPath, state) {
   fs.renameSync(tmp, sidecarPath)
 }
 
-// ---------------------------------------------------------------------------
-// passphrase generation
-// ---------------------------------------------------------------------------
-
-const WORDS = [
-  'amber', 'brave', 'cedar', 'delta', 'ember', 'flint', 'grove', 'harbor',
-  'ivory', 'jade', 'koala', 'lunar', 'maple', 'nimbus', 'onyx', 'pixel',
-  'quartz', 'raven', 'sable', 'topaz', 'umber', 'violet', 'willow', 'xenon',
-  'yarrow', 'zephyr', 'copper', 'basalt', 'cobalt', 'dahlia', 'falcon', 'garnet'
-]
-
-function randomPassphrase () {
-  const sodium = require('sodium-universal')
-  const idx = b4a.alloc(4)
-  const parts = []
-  for (let i = 0; i < 4; i++) {
-    sodium.randombytes_buf(idx)
-    parts.push(WORDS[readU32(idx, 0) % WORDS.length])
-  }
-  return parts.join('-')
-}
-
 // send(file, opts): convenience — listen then resolve with the verified
 // receipt (server closes afterward).
 async function send (file, opts = {}) {
@@ -473,6 +303,8 @@ module.exports = {
   MessageReader,
   writeMsg,
   runCPace,
+  SecretChannel,
+  secureChannel,
   u32be,
   readU32,
   DEFAULT_CHUNK_SIZE,

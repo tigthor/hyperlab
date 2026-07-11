@@ -30,6 +30,7 @@ const {
   MessageReader,
   writeMsg,
   runCPace,
+  secureChannel,
   u32be,
   TYPE
 } = require('..')
@@ -341,16 +342,16 @@ test('fuzz: a tampered chunk on the wire is detected and never lands in the fina
       const reader = new MessageReader(sock)
       try {
         if ((await sock.opened) === false) throw new Error('open failed')
-        await runCPace(sock, reader, passphrase, sid, true)
-        await writeMsg(sock, TYPE.MANIFEST, encodeManifest(manifest))
-        const resume = await reader.expect(TYPE.RESUME)
+        const ch = await secureChannel(sock, reader, passphrase, sid, true)
+        await ch.send(TYPE.MANIFEST, encodeManifest(manifest))
+        const resume = await ch.expect(TYPE.RESUME)
         const fromChunk = JSON.parse(b4a.toString(resume.payload)).fromChunk | 0
         for (let i = fromChunk; i < realTotal; i++) {
           const chunk = b4a.from(src.buf.subarray(i * chunkSize, Math.min(size, (i + 1) * chunkSize)))
-          if (i === badIndex) chunk[0] ^= 0xff // corrupt on the wire
-          await writeMsg(sock, TYPE.CHUNK, b4a.concat([u32be(i), chunk]))
+          if (i === badIndex) chunk[0] ^= 0xff // corrupt on the wire (inside the sealed channel)
+          await ch.send(TYPE.CHUNK, b4a.concat([u32be(i), chunk]))
         }
-        await writeMsg(sock, TYPE.DONE)
+        await ch.send(TYPE.DONE)
         // Wait for the receiver to detect the tamper and close FIRST, so the bad
         // chunk's bytes fully flush before the socket tears down. If we reset
         // eagerly, the TCP reset can outrun the in-flight chunk and the receiver
